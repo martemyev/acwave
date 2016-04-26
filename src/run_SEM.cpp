@@ -167,16 +167,14 @@ void AcousticWave::run_SEM_serial()
   const string method_name = "SEM_";
 
   cout << "Open seismograms files..." << flush;
-  ofstream *seisU; // for displacement
-  ofstream *seisV; // for velocity
-  open_seismo_outs(seisU, seisV, param, method_name);
+  ofstream *seisU; // for pressure
+  open_seismo_outs(seisU, param, method_name);
   cout << "done. Time = " << chrono.RealTime() << " sec" << endl;
   chrono.Clear();
 
-  GridFunction u_0(&fespace); // displacement
+  GridFunction u_0(&fespace); // pressure
   GridFunction u_1(&fespace);
   GridFunction u_2(&fespace);
-  GridFunction v_1(&fespace); // velocity
   u_0 = 0.0;
   u_1 = 0.0;
   u_2 = 0.0;
@@ -202,8 +200,7 @@ void AcousticWave::run_SEM_serial()
   const string pref_path = (string)param.output_dir + "/" + SNAPSHOTS_DIR;
   VisItDataCollection visit_dc(name.c_str(), param.mesh);
   visit_dc.SetPrefixPath(pref_path.c_str());
-  visit_dc.RegisterField("displacement", &u_0);
-  visit_dc.RegisterField("velocity", &v_1);
+  visit_dc.RegisterField("pressure", &u_0);
 
   StopWatch time_loop_timer;
   time_loop_timer.Start();
@@ -235,11 +232,6 @@ void AcousticWave::run_SEM_serial()
     // (M+D)*x_0 = M*(2*x_1-x_2) - dt^2*(S*x_1-r*b) + D*x_2
     for (int i = 0; i < N; ++i) u_0[i] = RHS[i] / (diagM[i]); //+diagD[i]);
 
-    // velocity: v = du/dt, we use the central difference here
-    v_1  = u_0;
-    v_1 -= u_2;
-    v_1 /= 2.0*param.dt;
-
     // Compute and print the L^2 norm of the error
     if (time_step % tenth == 0) {
       cout << "step " << time_step << " / " << n_time_steps
@@ -259,7 +251,7 @@ void AcousticWave::run_SEM_serial()
     if (time_step % param.step_seis == 0) {
       StopWatch timer;
       timer.Start();
-      output_seismograms(param, *param.mesh, u_0, v_1, seisU, seisV);
+      output_seismograms(param, *param.mesh, u_0, seisU);
       timer.Stop();
       time_of_seismograms += timer.UserTime();
     }
@@ -271,7 +263,6 @@ void AcousticWave::run_SEM_serial()
   time_loop_timer.Stop();
 
   delete[] seisU;
-  delete[] seisV;
 
   cout << "Time loop is over\n\tpure time = " << time_loop_timer.UserTime()
        << "\n\ttime of snapshots = " << time_of_snapshots

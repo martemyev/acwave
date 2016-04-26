@@ -99,24 +99,19 @@ protected:
 
 
 
-mfem::Vector compute_function_at_point(const mfem::Mesh& mesh,
-                                       const mfem::Vertex& point, int cell,
-                                       const mfem::GridFunction& U);
+double compute_function_at_point(const mfem::Mesh& mesh,
+                                 const mfem::Vertex& point, int cell,
+                                 const mfem::GridFunction& U);
 
 mfem::Vector compute_function_at_points(const mfem::Mesh& mesh, int n_points,
                                         const mfem::Vertex *points,
                                         const int *cells_containing_points,
                                         const mfem::GridFunction& U);
 
-void open_seismo_outs(std::ofstream* &seisU, std::ofstream* &seisV,
-                      const Parameters &param, const std::string &method_name);
-
-void output_snapshots(int time_step, const std::string& snapshot_filebase,
-                      const Parameters& param, const mfem::GridFunction& U,
-                      const mfem::GridFunction& V, const mfem::Mesh& mesh);
+void open_seismo_outs(std::ofstream* &seisU, const Parameters &param,
+                      const std::string &method_name);
 
 void output_seismograms(const Parameters& param, const mfem::Mesh& mesh,
-                        const mfem::GridFunction &U, const mfem::GridFunction &V,
-                        std::ofstream* &seisU, std::ofstream* &seisV);
+                        const mfem::GridFunction &U, std::ofstream* &seisU);
 
 #endif // ACOUSTIC_WAVE_HPP

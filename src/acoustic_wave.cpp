@@ -37,7 +37,7 @@ void AcousticWave::run()
 // Auxiliary useful functions
 //
 //------------------------------------------------------------------------------
-Vector compute_function_at_point(const Mesh& mesh, const Vertex& point,
+double compute_function_at_point(const Mesh& mesh, const Vertex& point,
                                  int cell, const GridFunction& U)
 {
   const int dim = mesh.Dimension();
@@ -84,10 +84,7 @@ Vector compute_function_at_point(const Mesh& mesh, const Vertex& point,
   if (dim == 3)
     ip.z = (point(2) - z0) / hz;
 
-  Vector values;
-  U.GetVectorValue(cell, ip, values);
-
-  return values;
+  return U.GetValue(cell, ip);
 }
 
 
@@ -97,114 +94,59 @@ Vector compute_function_at_points(const Mesh& mesh, int n_points,
                                   const int *cells_containing_points,
                                   const GridFunction& U)
 {
-  const int dim = mesh.Dimension();
-  Vector U_at_points(dim*n_points);
+  Vector U_at_points(n_points);
 
   for (int p = 0; p < n_points; ++p)
   {
-    Vector values = compute_function_at_point(mesh, points[p],
-                                              cells_containing_points[p], U);
-    MFEM_ASSERT(values.Size() == dim, "Unexpected vector size");
-    for (int c = 0; c < dim; ++c)
-      U_at_points(p*dim + c) = values(c);
+    U_at_points(p) = compute_function_at_point(mesh, points[p],
+                                               cells_containing_points[p], U);
   }
   return U_at_points;
 }
 
 
 
-void open_seismo_outs(ofstream* &seisU, ofstream* &seisV,
-                      const Parameters &param, const string &method_name)
+void open_seismo_outs(ofstream* &seisU, const Parameters &param,
+                      const string &method_name)
 {
-  const int dim = param.dimension;
-
   const int n_rec_sets = param.sets_of_receivers.size();
 
-  seisU = new ofstream[dim*n_rec_sets];
-  seisV = new ofstream[dim*n_rec_sets];
+  seisU = new ofstream[n_rec_sets];
 
   for (int r = 0; r < n_rec_sets; ++r)
   {
     const ReceiversSet *rec_set = param.sets_of_receivers[r];
     const string desc = rec_set->description();
-    const string variable = rec_set->get_variable();
 
-    if (variable.find("U") != string::npos) {
-      for (int c = 0; c < dim; ++c) {
-        string seismofile = (string)param.output_dir + "/" + SEISMOGRAMS_DIR +
-                            method_name + param.extra_string + desc + "_u" +
-                            d2s(c) + ".bin";
-        seisU[r*dim + c].open(seismofile.c_str(), ios::binary);
-        MFEM_VERIFY(seisU[r*dim + c], "File '" + seismofile +
-                    "' can't be opened");
-      }
-    }
-
-    if (variable.find("V") != string::npos) {
-      for (int c = 0; c < dim; ++c) {
-        string seismofile = (string)param.output_dir + "/" + SEISMOGRAMS_DIR +
-                            method_name + param.extra_string + desc + "_v" +
-                            d2s(c) + ".bin";
-        seisV[r*dim + c].open(seismofile.c_str(), ios::binary);
-        MFEM_VERIFY(seisV[r*dim + c], "File '" + seismofile +
-                    "' can't be opened");
-      }
-    }
+    string seismofile = (string)param.output_dir + "/" + SEISMOGRAMS_DIR +
+                        method_name + param.extra_string + desc + "_p.bin";
+    seisU[r].open(seismofile.c_str(), ios::binary);
+    MFEM_VERIFY(seisU[r], "File '" + seismofile + "' can't be opened");
   } // loop for sets of receivers
 }
 
 
 
 void output_seismograms(const Parameters& param, const Mesh& mesh,
-                        const GridFunction &U, const GridFunction &V,
-                        ofstream* &seisU, ofstream* &seisV)
+                        const GridFunction &U, ofstream* &seisU)
 {
-  const int dim = mesh.Dimension();
-
   // for each set of receivers
   for (size_t rec = 0; rec < param.sets_of_receivers.size(); ++rec)
   {
+    MFEM_VERIFY(seisU[rec].is_open(), "The stream for writing seismograms is "
+                "not open");
+
     const ReceiversSet *rec_set = param.sets_of_receivers[rec];
-    const string variable = rec_set->get_variable();
 
-    // Displacement
-    if (variable.find("U") != string::npos) {
-      for (int c = 0; c < dim; ++c) {
-        MFEM_VERIFY(seisU[rec*dim+c].is_open(), "The stream for "
-                    "writing displacement seismograms is not open");
-      }
-      // displacement at the receivers
-      const Vector u =
-        compute_function_at_points(mesh, rec_set->n_receivers(),
-                                   &(rec_set->get_receivers()[0]),
-                                   &(rec_set->get_cells_containing_receivers()[0]), U);
-      MFEM_ASSERT(u.Size() == dim*rec_set->n_receivers(), "Sizes mismatch");
-      for (int i = 0; i < u.Size(); i += dim) {
-        for (int j = 0; j < dim; ++j) {
-          float val = u(i+j); // displacement
-          seisU[rec*dim + j].write(reinterpret_cast<char*>(&val), sizeof(val));
-        }
-      }
-    }
-
-    // Particle velocity
-    if (variable.find("V") != string::npos) {
-      for (int c = 0; c < dim; ++c) {
-        MFEM_VERIFY(seisV[rec*dim+c].is_open(), "The stream for "
-                    "writing velocity seismograms is not open");
-      }
-      // velocity at the receivers
-      const Vector v =
-        compute_function_at_points(mesh, rec_set->n_receivers(),
-                                   &(rec_set->get_receivers()[0]),
-                                   &(rec_set->get_cells_containing_receivers()[0]), V);
-      MFEM_ASSERT(v.Size() == dim*rec_set->n_receivers(), "Sizes mismatch");
-      for (int i = 0; i < v.Size(); i += dim) {
-        for (int j = 0; j < dim; ++j) {
-          float val = v(i+j); // velocity
-          seisV[rec*dim + j].write(reinterpret_cast<char*>(&val), sizeof(val));
-        }
-      }
+    // pressure at the receivers
+    const Vector u =
+      compute_function_at_points(mesh, rec_set->n_receivers(),
+                                 &(rec_set->get_receivers()[0]),
+                                 &(rec_set->get_cells_containing_receivers()[0]), U);
+    MFEM_ASSERT(u.Size() == rec_set->n_receivers(), "Sizes mismatch");
+    for (int i = 0; i < u.Size(); ++i) {
+      float val = u(i);
+      seisU[rec].write(reinterpret_cast<char*>(&val), sizeof(val));
     }
   } // loop over receiver sets
 }
