@@ -220,6 +220,37 @@ void BoundaryConditionsParameters::check_parameters() const
 
 //------------------------------------------------------------------------------
 //
+// Method parameters
+//
+//------------------------------------------------------------------------------
+MethodParameters::MethodParameters()
+  : order(1)
+  , name("sem")
+  , dg_sigma(-1.) // SIPDG
+  , dg_kappa(1.)
+{ }
+
+void MethodParameters::AddOptions(OptionsParser& args)
+{
+  args.AddOption(&order, "-o", "--order", "Finite element order (polynomial degree)");
+  args.AddOption(&name, "-method", "--method", "Finite elements (fem), spectral elements (sem), discontinuous Galerkin (dg)");
+  args.AddOption(&dg_sigma, "-dg-sigma", "--dg-sigma", "Sigma in the DG method");
+  args.AddOption(&dg_kappa, "-dg-kappa", "--dg-kappa", "Kappa in the DG method");
+}
+
+void MethodParameters::check_parameters() const
+{
+  MFEM_VERIFY(order >= 0, "Order is negative");
+  MFEM_VERIFY(!strcmp(name, "FEM") || !strcmp(name, "fem") ||
+              !strcmp(name, "SEM") || !strcmp(name, "sem") ||
+              !strcmp(name, "DG")  || !strcmp(name, "dg"), "Unknown method "
+              ": " + string(name));
+}
+
+
+
+//------------------------------------------------------------------------------
+//
 // All parameters of the problem to be solved
 //
 //------------------------------------------------------------------------------
@@ -229,16 +260,15 @@ Parameters::Parameters()
   , source()
   , media()
   , bc()
+  , method()
   , mesh(nullptr)
   , T(1.0)
   , dt(1e-3)
-  , order(1)
-  , method("sem")
-  , extra_string("")
   , step_snap(1000)
   , step_seis(1)
   , receivers_file(DEFAULT_FILE_NAME)
   , output_dir("output")
+  , extra_string("")
 { }
 
 Parameters::~Parameters()
@@ -259,16 +289,15 @@ void Parameters::init(int argc, char **argv)
   source.AddOptions(args);
   media.AddOptions(args);
   bc.AddOptions(args);
+  method.AddOptions(args);
 
   args.AddOption(&T, "-T", "--time-end", "Simulation time, s");
   args.AddOption(&dt, "-dt", "--time-step", "Time step, s");
-  args.AddOption(&order, "-o", "--order", "Finite element order (polynomial degree)");
-  args.AddOption(&method, "-method", "--method", "Finite elements (fem) or spectral elements (sem)");
   args.AddOption(&step_snap, "-step-snap", "--step-snapshot", "Time step for outputting snapshots");
   args.AddOption(&step_seis, "-step-seis", "--step-seismogram", "Time step for outputting seismograms");
   args.AddOption(&receivers_file, "-rec-file", "--receivers-file", "File with information about receivers");
-  args.AddOption(&extra_string, "-extra", "--extra", "Extra string for naming output files");
   args.AddOption(&output_dir, "-outdir", "--output-dir", "Directory to save results of computations");
+  args.AddOption(&extra_string, "-extra", "--extra", "Extra string for naming output files");
 
   args.Parse();
   if (!args.Good())
@@ -384,10 +413,10 @@ void Parameters::check_parameters() const
   source.check_parameters();
   media.check_parameters();
   bc.check_parameters();
+  method.check_parameters();
 
   MFEM_VERIFY(T > 0, "Time (" + d2s(T) + ") must be >0");
   MFEM_VERIFY(dt < T, "dt (" + d2s(dt) + ") must be < T (" + d2s(T) + ")");
-  MFEM_VERIFY(order > 0, "FEM order (" + d2s(order) + ") must be >0");
   MFEM_VERIFY(step_snap > 0, "step_snap (" + d2s(step_snap) + ") must be >0");
   MFEM_VERIFY(step_seis > 0, "step_seis (" + d2s(step_seis) + ") must be >0");
 }

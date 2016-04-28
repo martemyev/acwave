@@ -44,7 +44,7 @@ private:
 class CWConstCoefficient : public mfem::Coefficient
 {
 public:
-  CWConstCoefficient(double *array, bool own = 1)
+  CWConstCoefficient(const double *array, bool own = 1)
     : val_array(array), own_array(own)
   { }
 
@@ -54,11 +54,12 @@ public:
                       const mfem::IntegrationPoint &/*ip*/)
   {
     const int index = T.Attribute - 1; // use attribute as a cell number
+    MFEM_VERIFY(index >= 0, "index is negative");
     return val_array[index];
   }
 
 protected:
-  double *val_array;
+  const double *val_array;
   bool own_array;
 };
 
@@ -73,7 +74,7 @@ class CWFunctionCoefficient : public CWConstCoefficient
 public:
   CWFunctionCoefficient(double(*F)(const mfem::Vector&, const Parameters&),
                         const Parameters& p,
-                        double *array, bool own = 1)
+                        const double *array, bool own = 1)
     : CWConstCoefficient(array, own)
     , Function(F)
     , param(p)

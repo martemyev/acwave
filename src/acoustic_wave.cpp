@@ -11,22 +11,21 @@ using namespace mfem;
 
 void AcousticWave::run()
 {
-  if (!strcmp(param.method, "fem") || !strcmp(param.method, "FEM"))
+  if (!strcmp(param.method.name, "fem") || !strcmp(param.method.name, "FEM"))
   {
     run_FEM();
   }
-  else if (!strcmp(param.method, "sem") || !strcmp(param.method, "SEM"))
+  else if (!strcmp(param.method.name, "sem") || !strcmp(param.method.name, "SEM"))
   {
     run_SEM();
   }
-  else if (!strcmp(param.method, "dg") || !strcmp(param.method, "DG"))
+  else if (!strcmp(param.method.name, "dg") || !strcmp(param.method.name, "DG"))
   {
-    // run_DG();
-    MFEM_ABORT("DG method is not implemented");
+    run_DG();
   }
   else
   {
-    MFEM_ABORT("Unknown method to be used: " + string(param.method));
+    MFEM_ABORT("Unknown method to be used: " + string(param.method.name));
   }
 }
 

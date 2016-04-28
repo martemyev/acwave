@@ -8,7 +8,7 @@
 #include <string>
 #include <vector>
 
-static const char* DEFAULT_FILE_NAME = "no-file";
+static const char DEFAULT_FILE_NAME[] = "no-file";
 
 class ReceiversSet;
 class SnapshotsSet;
@@ -122,6 +122,37 @@ private:
   BoundaryConditionsParameters& operator=(const BoundaryConditionsParameters&);
 };
 
+/**
+ * Parameters describing the method and some specific parameters of the method
+ * (if any).
+ */
+class MethodParameters
+{
+public:
+  MethodParameters();
+  ~MethodParameters() { }
+
+  int order; ///< finite element order
+  const char *name; ///< FEM, SEM, DG
+
+  /**
+   * Parameters of the DG method.
+   * sigma = -1, kappa >= kappa0: symm. interior penalty (IP or SIPG) method,
+   * sigma = +1, kappa > 0: non-symmetric interior penalty (NIPG) method,
+   * sigma = +1, kappa = 0: the method of Baumann and Oden
+   */
+  double dg_sigma, dg_kappa;
+
+  void AddOptions(mfem::OptionsParser& args);
+  void check_parameters() const;
+
+private:
+  MethodParameters(const MethodParameters&);
+  MethodParameters& operator=(const MethodParameters&);
+};
+
+
+
 
 
 /**
@@ -139,16 +170,12 @@ public:
   SourceParameters source;
   MediaPropertiesParameters media;
   BoundaryConditionsParameters bc;
+  MethodParameters method;
 
   mfem::Mesh *mesh;
 
   double T; ///< simulation time
   double dt; ///< time step
-  int order; ///< finite element order
-
-  const char *method; ///< finite elements (fem) or spectral elements (sem)
-  const char *extra_string; ///< added to output files for distinguishing the
-                            ///< results
 
   int step_snap; ///< time step for outputting snapshots (every *th time step)
   int step_seis; ///< time step for outputting seismograms (every *th time step)
@@ -156,6 +183,8 @@ public:
   std::vector<ReceiversSet*> sets_of_receivers;
 
   const char *output_dir; ///< directory for saving results of computations
+  const char *extra_string; ///< added to output files for distinguishing the
+                            ///< results
 
   void init(int argc, char **argv);
   void check_parameters() const;

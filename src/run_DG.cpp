@@ -1,5 +1,4 @@
 #include "acoustic_wave.hpp"
-#include "GLL_quadrature.hpp"
 #include "parameters.hpp"
 #include "utilities.hpp"
 
@@ -10,18 +9,18 @@ using namespace mfem;
 
 
 
-void AcousticWave::run_SEM()
+void AcousticWave::run_DG()
 {
 #if defined(MFEM_USE_MPI)
-  run_SEM_parallel();
+  run_DG_parallel();
 #else
-  run_SEM_serial();
+  run_DG_serial();
 #endif
 }
 
 
 
-void AcousticWave::run_SEM_serial()
+void AcousticWave::run_DG_serial()
 {
   MFEM_VERIFY(param.mesh, "The mesh is not initialized");
 
@@ -33,7 +32,7 @@ void AcousticWave::run_SEM_serial()
   const int n_elements = param.mesh->GetNE();
 
   cout << "FE space generation..." << flush;
-  FiniteElementCollection *fec = new H1_FECollection(param.method.order, dim);
+  FiniteElementCollection *fec = new DG_FECollection(param.method.order, dim);
   FiniteElementSpace fespace(param.mesh, fec);
   cout << "done. Time = " << chrono.RealTime() << " sec" << endl;
   chrono.Clear();
@@ -74,19 +73,17 @@ void AcousticWave::run_SEM_serial()
   CWConstCoefficient one_over_rho_coef(one_over_rho, own_array);
   CWConstCoefficient one_over_K_coef(one_over_K, own_array);
 
-  IntegrationRule segment_GLL;
-  create_segment_GLL_rule(param.method.order, segment_GLL);
-  IntegrationRule *GLL_rule = nullptr;
-  if (param.dimension == 2)
-    GLL_rule = new IntegrationRule(segment_GLL, segment_GLL);
-  else
-    GLL_rule = new IntegrationRule(segment_GLL, segment_GLL, segment_GLL);
-
   cout << "Stif matrix..." << flush;
-  DiffusionIntegrator *elast_int = new DiffusionIntegrator(one_over_rho_coef);
-  elast_int->SetIntRule(GLL_rule);
   BilinearForm stif(&fespace);
-  stif.AddDomainIntegrator(elast_int);
+  stif.AddDomainIntegrator(new DiffusionIntegrator(one_over_rho_coef));
+  stif.AddInteriorFaceIntegrator(
+        new DGDiffusionIntegrator(one_over_rho_coef,
+                                  param.method.dg_sigma,
+                                  param.method.dg_kappa));
+  stif.AddBdrFaceIntegrator(
+        new DGDiffusionIntegrator(one_over_rho_coef,
+                                  param.method.dg_sigma,
+                                  param.method.dg_kappa));
   stif.Assemble();
   stif.Finalize();
   const SparseMatrix& S = stif.SpMat();
@@ -94,10 +91,8 @@ void AcousticWave::run_SEM_serial()
   chrono.Clear();
 
   cout << "Mass matrix..." << flush;
-  MassIntegrator *mass_int = new MassIntegrator(one_over_K_coef);
-  mass_int->SetIntRule(GLL_rule);
   BilinearForm mass(&fespace);
-  mass.AddDomainIntegrator(mass_int);
+  mass.AddDomainIntegrator(new MassIntegrator(one_over_K_coef));
   mass.Assemble();
   mass.Finalize();
   const SparseMatrix& M = mass.SpMat();
@@ -128,43 +123,49 @@ void AcousticWave::run_SEM_serial()
 //  cout << "done. Time = " << chrono.RealTime() << " sec" << endl;
 //  chrono.Clear();
 
+  cout << "Sys matrix..." << flush;
+  const SparseMatrix& CopyFrom = M;
+  const int nnz = CopyFrom.NumNonZeroElems();
+  const bool ownij  = false;
+  const bool ownval = true;
+  SparseMatrix Sys(CopyFrom.GetI(), CopyFrom.GetJ(), new double[nnz],
+                   CopyFrom.Height(), CopyFrom.Width(), ownij, ownval,
+                   CopyFrom.areColumnsSorted());
+  Sys = 0.0;
+  //Sys += D;
+  Sys += M;
+  GSSmoother prec(Sys);
+  cout << "done. Time = " << chrono.RealTime() << " sec" << endl;
+  chrono.Clear();
+
   cout << "RHS vector... " << flush;
   LinearForm b(&fespace);
+  ConstantCoefficient zero(0.0); // homogeneous Dirichlet bc
   if (param.source.plane_wave)
   {
     PlaneWaveSource plane_wave_source(param, one_over_K_coef);
-    DomainLFIntegrator *plane_wave_int =
-        new DomainLFIntegrator(plane_wave_source);
-    plane_wave_int->SetIntRule(GLL_rule);
-    b.AddDomainIntegrator(plane_wave_int);
+    b.AddDomainIntegrator(new DomainLFIntegrator(plane_wave_source));
+    b.AddBdrFaceIntegrator(
+          new DGDirichletLFIntegrator(zero, one_over_rho_coef,
+                                      param.method.dg_sigma,
+                                      param.method.dg_kappa));
     b.Assemble();
   }
   else
   {
     ScalarPointForce scalar_point_force(param, one_over_K_coef);
-    DomainLFIntegrator *point_force_int =
-        new DomainLFIntegrator(scalar_point_force);
-    point_force_int->SetIntRule(GLL_rule);
-    b.AddDomainIntegrator(point_force_int);
+    b.AddDomainIntegrator(new DomainLFIntegrator(scalar_point_force));
+    b.AddBdrFaceIntegrator(
+          new DGDirichletLFIntegrator(zero, one_over_rho_coef,
+                                      param.method.dg_sigma,
+                                      param.method.dg_kappa));
     b.Assemble();
   }
   cout << "||b||_L2 = " << b.Norml2() << endl;
   cout << "done. Time = " << chrono.RealTime() << " sec" << endl;
   chrono.Clear();
 
-  delete GLL_rule;
-
-  Vector diagM; M.GetDiag(diagM); // mass matrix is diagonal
-//  Vector diagD; D.GetDiag(diagD); // damping matrix is diagonal
-
-  for (int i = 0; i < diagM.Size(); ++i)
-  {
-    MFEM_VERIFY(fabs(diagM[i]) > FLOAT_NUMBERS_EQUALITY_TOLERANCE,
-                "There is a small (" + d2s(diagM[i]) + ") number (row "
-                + d2s(i) + ") on the mass matrix diagonal");
-  }
-
-  const string method_name = "SEM_";
+  const string method_name = "DG_";
 
   cout << "Open seismograms files..." << flush;
   ofstream *seisU; // for pressure
@@ -211,7 +212,7 @@ void AcousticWave::run_SEM_serial()
     Vector y = u_1; y *= 2.0; y -= u_2;        // y = 2*u_1 - u_2
 
     Vector z0; z0.SetSize(N);                  // z0 = M * (2*u_1 - u_2)
-    for (int i = 0; i < N; ++i) z0[i] = diagM[i] * y[i];
+    M.Mult(y, z0);
 
     Vector z1; z1.SetSize(N); S.Mult(u_1, z1);     // z1 = S * u_1
     Vector z2 = b; z2 *= time_values[time_step-1]; // z2 = timeval*source
@@ -230,7 +231,7 @@ void AcousticWave::run_SEM_serial()
 //    RHS += y;
 
     // (M+D)*x_0 = M*(2*x_1-x_2) - dt^2*(S*x_1-r*b) + D*x_2
-    for (int i = 0; i < N; ++i) u_0[i] = RHS[i] / (diagM[i]); //+diagD[i]);
+    PCG(Sys, prec, RHS, u_0, 0, 200, 1e-12, 0.0);
 
     // Compute and print the L^2 norm of the error
     if (time_step % tenth == 0) {
@@ -270,3 +271,5 @@ void AcousticWave::run_SEM_serial()
 
   delete fec;
 }
+
+

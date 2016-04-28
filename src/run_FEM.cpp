@@ -32,7 +32,7 @@ void AcousticWave::run_FEM_serial()
   const int n_elements = param.mesh->GetNE();
 
   cout << "FE space generation..." << flush;
-  FiniteElementCollection *fec = new H1_FECollection(param.order, dim);
+  FiniteElementCollection *fec = new H1_FECollection(param.method.order, dim);
   FiniteElementSpace fespace(param.mesh, fec);
   cout << "done. Time = " << chrono.RealTime() << " sec" << endl;
   chrono.Clear();
