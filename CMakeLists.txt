@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 2.8)
 
 
-project(acwave CXX)
+project(acwave)
 
 
 if(NOT CMAKE_BUILD_TYPE)
@@ -12,6 +12,9 @@ string(TOUPPER ${CMAKE_BUILD_TYPE} BUILD_TYPE)
 message(STATUS "BUILD_TYPE ${BUILD_TYPE}")
 
 add_definitions("-std=c++0x -Wall") # some extra flags
+if(BUILD_TYPE STREQUAL "DEBUG" OR BUILD_TYPE STREQUAL "PDEBUG")
+  add_definitions("-g")
+endif()
 
 #-------------------------------------------------------------------------------
 # MFEM
@@ -97,6 +100,9 @@ if(NOT(BUILD_TYPE STREQUAL "RELEASE") AND
 endif()
 
 
+find_package(LAPACK REQUIRED)
+
+
 file(GLOB SRC_LIST "${PROJECT_SOURCE_DIR}/src/*.cpp")
 file(GLOB HDR_LIST "${PROJECT_SOURCE_DIR}/src/*.hpp")
 include_directories("${PROJECT_SOURCE_DIR}/src") # for "config.hpp"
@@ -114,6 +120,8 @@ message("\n--------------- configuration information ----------------")
   message("hypre lib      : " ${HYPRE_LIBRARIES})
   message("metis dir      : " ${METIS_DIR})
   message("metis lib      : " ${METIS_LIBRARIES})
+  message("BLAS lib       : " ${BLAS_LIBRARIES})
+  message("LAPACK lib     : " ${LAPACK_LIBRARIES})
 if(BUILD_TYPE STREQUAL "DEBUG")
   message("compiler flags : " ${CMAKE_CXX_FLAGS_DEBUG})
 elseif(BUILD_TYPE STREQUAL "RELWITHDEBINFO")
@@ -125,6 +133,7 @@ endif()
 
 add_executable(${PROJECT_NAME} ${SRC_LIST} ${HDR_LIST})
 target_link_libraries(${PROJECT_NAME} ${MFEM_LIBRARY})
+target_link_libraries(${PROJECT_NAME} ${LAPACK_LIBRARIES})
 if(CMAKE_SYSTEM_NAME MATCHES "Linux")
   target_link_libraries(${PROJECT_NAME} rt)
 endif()

@@ -228,6 +228,8 @@ MethodParameters::MethodParameters()
   , name("sem")
   , dg_sigma(-1.) // SIPDG
   , dg_kappa(1.)
+  , gms_Nx(1), gms_Ny(1), gms_Nz(1)
+  , gms_nb(1), gms_ni(1)
 { }
 
 void MethodParameters::AddOptions(OptionsParser& args)
@@ -236,6 +238,11 @@ void MethodParameters::AddOptions(OptionsParser& args)
   args.AddOption(&name, "-method", "--method", "Finite elements (fem), spectral elements (sem), discontinuous Galerkin (dg)");
   args.AddOption(&dg_sigma, "-dg-sigma", "--dg-sigma", "Sigma in the DG method");
   args.AddOption(&dg_kappa, "-dg-kappa", "--dg-kappa", "Kappa in the DG method");
+  args.AddOption(&gms_Nx, "-gms-Nx", "--gms-Nx", "Number of coarse cells in x-direction");
+  args.AddOption(&gms_Ny, "-gms-Ny", "--gms-Ny", "Number of coarse cells in y-direction");
+  args.AddOption(&gms_Nz, "-gms-Nz", "--gms-Nz", "Number of coarse cells in z-direction");
+  args.AddOption(&gms_nb, "-gms-nb", "--gms-nb", "Number of boundary basis functions");
+  args.AddOption(&gms_ni, "-gms-ni", "--gms-ni", "Number of interior basis functions");
 }
 
 void MethodParameters::check_parameters() const
@@ -243,8 +250,9 @@ void MethodParameters::check_parameters() const
   MFEM_VERIFY(order >= 0, "Order is negative");
   MFEM_VERIFY(!strcmp(name, "FEM") || !strcmp(name, "fem") ||
               !strcmp(name, "SEM") || !strcmp(name, "sem") ||
-              !strcmp(name, "DG")  || !strcmp(name, "dg"), "Unknown method "
-              ": " + string(name));
+              !strcmp(name, "DG")  || !strcmp(name, "dg")  ||
+              !strcmp(name, "GMsFEM") || !strcmp(name, "gmsfem"),
+              "Unknown method: " + string(name));
 }
 
 

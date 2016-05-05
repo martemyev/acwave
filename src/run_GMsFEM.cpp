@@ -9,30 +9,43 @@ using namespace mfem;
 
 
 
-void AcousticWave::run_DG() const
+void AcousticWave::run_GMsFEM() const
 {
 #if defined(MFEM_USE_MPI)
-  run_DG_parallel();
+  run_GMsFEM_parallel();
 #else
-  run_DG_serial();
+  run_GMsFEM_serial();
 #endif
 }
 
 
 
-void AcousticWave::run_DG_parallel() const
+void AcousticWave::run_GMsFEM_parallel() const
 {
   int size;
   MPI_Comm_size(MPI_COMM_WORLD, &size);
   if (size == 1)
-    run_DG_serial();
+    run_GMsFEM_serial();
   else
     MFEM_ABORT("NOT implemented");
 }
 
 
 
-void AcousticWave::run_DG_serial() const
+void fill_up_n_fine_cells_per_coarse(int n_fine, int n_coarse,
+                                     std::vector<int> &result)
+{
+  const int k = n_fine / n_coarse;
+  for (size_t i = 0; i < result.size(); ++i)
+    result[i] = k;
+  const int p = n_fine % n_coarse;
+  for (int i = 0; i < p; ++i)
+    ++result[i];
+}
+
+
+
+void AcousticWave::run_GMsFEM_serial() const
 {
   MFEM_VERIFY(param.mesh, "The mesh is not initialized");
 
@@ -64,7 +77,7 @@ void AcousticWave::run_DG_serial() const
     const double vp  = param.media.vp_array[i];
     const double K   = rho*vp*vp;
 
-    MFEM_VERIFY(rho > 1.0 && vp > 1.0, "Incorrect media properties arrays");
+    MFEM_VERIFY(rho > 0. && vp > 0., "Incorrect media properties arrays");
 
     Rho[0] = std::min(Rho[0], rho);
     Rho[1] = std::max(Rho[1], rho);
@@ -81,33 +94,33 @@ void AcousticWave::run_DG_serial() const
   std::cout << "Vp:  min " << Vp[0]  << " max " << Vp[1] << "\n";
   std::cout << "Kap: min " << Kap[0] << " max " << Kap[1] << "\n";
 
-  const bool own_array = false;
+  const bool own_array = true;
   CWConstCoefficient one_over_rho_coef(one_over_rho, own_array);
   CWConstCoefficient one_over_K_coef(one_over_K, own_array);
 
-  cout << "Stif matrix..." << flush;
-  BilinearForm stif(&fespace);
-  stif.AddDomainIntegrator(new DiffusionIntegrator(one_over_rho_coef));
-  stif.AddInteriorFaceIntegrator(
+  cout << "Fine scale stif matrix..." << flush;
+  BilinearForm stif_fine(&fespace);
+  stif_fine.AddDomainIntegrator(new DiffusionIntegrator(one_over_rho_coef));
+  stif_fine.AddInteriorFaceIntegrator(
         new DGDiffusionIntegrator(one_over_rho_coef,
                                   param.method.dg_sigma,
                                   param.method.dg_kappa));
-  stif.AddBdrFaceIntegrator(
+  stif_fine.AddBdrFaceIntegrator(
         new DGDiffusionIntegrator(one_over_rho_coef,
                                   param.method.dg_sigma,
                                   param.method.dg_kappa));
-  stif.Assemble();
-  stif.Finalize();
-  const SparseMatrix& S = stif.SpMat();
+  stif_fine.Assemble();
+  stif_fine.Finalize();
+  const SparseMatrix& S_fine = stif_fine.SpMat();
   cout << "done. Time = " << chrono.RealTime() << " sec" << endl;
   chrono.Clear();
 
-  cout << "Mass matrix..." << flush;
-  BilinearForm mass(&fespace);
-  mass.AddDomainIntegrator(new MassIntegrator(one_over_K_coef));
-  mass.Assemble();
-  mass.Finalize();
-  const SparseMatrix& M = mass.SpMat();
+  cout << "Fine scale mass matrix..." << flush;
+  BilinearForm mass_fine(&fespace);
+  mass_fine.AddDomainIntegrator(new MassIntegrator(one_over_K_coef));
+  mass_fine.Assemble();
+  mass_fine.Finalize();
+  const SparseMatrix& M_fine = mass_fine.SpMat();
   cout << "done. Time = " << chrono.RealTime() << " sec" << endl;
   chrono.Clear();
 
@@ -115,7 +128,7 @@ void AcousticWave::run_DG_serial() const
   {
     cout << "Output mass matrix..." << flush;
     ofstream mout("mass_mat.dat");
-    mass.PrintMatlab(mout);
+    mass_fine.PrintMatlab(mout);
     cout << "M.nnz = " << M.NumNonZeroElems() << endl;
     cout << "done. Time = " << chrono.RealTime() << " sec" << endl;
     chrono.Clear();
@@ -135,49 +148,162 @@ void AcousticWave::run_DG_serial() const
 //  cout << "done. Time = " << chrono.RealTime() << " sec" << endl;
 //  chrono.Clear();
 
-  cout << "Sys matrix..." << flush;
-  const SparseMatrix& CopyFrom = M;
-  const int nnz = CopyFrom.NumNonZeroElems();
-  const bool ownij  = false;
-  const bool ownval = true;
-  SparseMatrix Sys(CopyFrom.GetI(), CopyFrom.GetJ(), new double[nnz],
-                   CopyFrom.Height(), CopyFrom.Width(), ownij, ownval,
-                   CopyFrom.areColumnsSorted());
-  Sys = 0.0;
-  //Sys += D;
-  Sys += M;
-  GSSmoother prec(Sys);
-  cout << "done. Time = " << chrono.RealTime() << " sec" << endl;
-  chrono.Clear();
-
-  cout << "RHS vector... " << flush;
-  LinearForm b(&fespace);
+  cout << "Fine scale RHS vector... " << flush;
+  LinearForm b_fine(&fespace);
   ConstantCoefficient zero(0.0); // homogeneous Dirichlet bc
   if (param.source.plane_wave)
   {
     PlaneWaveSource plane_wave_source(param, one_over_K_coef);
-    b.AddDomainIntegrator(new DomainLFIntegrator(plane_wave_source));
-    b.AddBdrFaceIntegrator(
+    b_fine.AddDomainIntegrator(new DomainLFIntegrator(plane_wave_source));
+    b_fine.AddBdrFaceIntegrator(
           new DGDirichletLFIntegrator(zero, one_over_rho_coef,
                                       param.method.dg_sigma,
                                       param.method.dg_kappa));
-    b.Assemble();
+    b_fine.Assemble();
   }
   else
   {
     ScalarPointForce scalar_point_force(param, one_over_K_coef);
-    b.AddDomainIntegrator(new DomainLFIntegrator(scalar_point_force));
-    b.AddBdrFaceIntegrator(
+    b_fine.AddDomainIntegrator(new DomainLFIntegrator(scalar_point_force));
+    b_fine.AddBdrFaceIntegrator(
           new DGDirichletLFIntegrator(zero, one_over_rho_coef,
                                       param.method.dg_sigma,
                                       param.method.dg_kappa));
-    b.Assemble();
+    b_fine.Assemble();
   }
-  cout << "||b||_L2 = " << b.Norml2() << endl;
+  cout << "||b_h||_L2 = " << b_fine.Norml2() << endl;
   cout << "done. Time = " << chrono.RealTime() << " sec" << endl;
   chrono.Clear();
 
-  const string method_name = "DG_";
+
+  std::vector<int> n_fine_cell_per_coarse_x(param.method.gms_Nx);
+  fill_up_n_fine_cells_per_coarse(param.grid.nx, param.method.gms_Nx,
+                                  n_fine_cell_per_coarse_x);
+
+  std::vector<int> n_fine_cell_per_coarse_y(param.method.gms_Ny);
+  fill_up_n_fine_cells_per_coarse(param.grid.ny, param.method.gms_Ny,
+                                  n_fine_cell_per_coarse_y);
+
+  const double hx = param.grid.get_hx();
+  const double hy = param.grid.get_hy();
+
+  const int gen_edges = 1;
+
+  std::vector<DenseMatrix> R;
+
+  if (param.dimension == 2)
+  {
+    R.resize(param.method.gms_Nx * param.method.gms_Ny);
+
+    int offset_x = 0, offset_y = 0;
+
+    for (int iy = 0; iy < param.method.gms_Ny; ++iy)
+    {
+      const int n_fine_y = n_fine_cell_per_coarse_y[iy];
+      const double SY = n_fine_y * hy;
+
+      for (int ix = 0; ix < param.method.gms_Nx; ++ix)
+      {
+        const int n_fine_x = n_fine_cell_per_coarse_x[ix];
+        const double SX = n_fine_x * hx;
+        Mesh *ccell =
+            new Mesh(n_fine_x, n_fine_y, Element::QUADRILATERAL, gen_edges, SX, SY);
+
+        double *local_one_over_rho = new double[n_fine_x * n_fine_y];
+        double *local_one_over_K   = new double[n_fine_x * n_fine_y];
+        for (int fiy = 0; fiy < n_fine_y; ++fiy)
+        {
+          for (int fix = 0; fix < n_fine_x; ++fix)
+          {
+            const int loc_cell = fiy*n_fine_x + fix;
+            const int glob_cell = (offset_y + fiy) * param.grid.nx +
+                                  (offset_x + fix);
+
+            local_one_over_rho[loc_cell] = one_over_rho[glob_cell];
+            local_one_over_K[loc_cell]   = one_over_K[glob_cell];
+          }
+        }
+        const bool own_array = true;
+        CWConstCoefficient local_one_over_rho_coef(local_one_over_rho, own_array);
+        CWConstCoefficient local_one_over_K_coef(local_one_over_K, own_array);
+
+        compute_basis(ccell, param.method.gms_nb, param.method.gms_ni,
+                      local_one_over_rho_coef, local_one_over_K_coef,
+                      R[iy*param.method.gms_Nx + ix]);
+
+        offset_x += n_fine_x;
+      }
+      offset_y += n_fine_y;
+    }
+  }
+  else // 3D
+  {
+    std::vector<int> n_fine_cell_per_coarse_z(param.method.gms_Nz);
+    fill_up_n_fine_cells_per_coarse(param.grid.nz, param.method.gms_Nz,
+                                    n_fine_cell_per_coarse_z);
+
+    const double hz = param.grid.get_hz();
+
+    R.resize(param.method.gms_Nx * param.method.gms_Ny * param.method.gms_Nz);
+
+    int offset_x = 0, offset_y = 0, offset_z = 0;
+
+    for (int iz = 0; iz < param.method.gms_Nz; ++iz)
+    {
+      const int n_fine_z = n_fine_cell_per_coarse_z[iz];
+      const double SZ = n_fine_z * hz;
+      for (int iy = 0; iy < param.method.gms_Ny; ++iy)
+      {
+        const int n_fine_y = n_fine_cell_per_coarse_y[iy];
+        const double SY = n_fine_y * hy;
+        for (int ix = 0; ix < param.method.gms_Nx; ++ix)
+        {
+          const int n_fine_x = n_fine_cell_per_coarse_x[ix];
+          const double SX = n_fine_x * hx;
+          Mesh *ccell =
+              new Mesh(n_fine_cell_per_coarse_x[ix],
+                       n_fine_cell_per_coarse_y[iy],
+                       n_fine_cell_per_coarse_z[iz],
+                       Element::HEXAHEDRON, gen_edges, SX, SY, SZ);
+
+          double *local_one_over_rho = new double[n_fine_x * n_fine_y * n_fine_z];
+          double *local_one_over_K   = new double[n_fine_x * n_fine_y * n_fine_z];
+          for (int fiz = 0; fiz < n_fine_z; ++fiz)
+          {
+            for (int fiy = 0; fiy < n_fine_y; ++fiy)
+            {
+              for (int fix = 0; fix < n_fine_x; ++fix)
+              {
+                const int loc_cell = fiz*n_fine_x*n_fine_y + fiy*n_fine_x + fix;
+                const int glob_cell = (offset_z + fiz) * param.grid.nx * param.grid.ny +
+                                      (offset_y + fiy) * param.grid.nx +
+                                      (offset_x + fix);
+
+                local_one_over_rho[loc_cell] = one_over_rho[glob_cell];
+                local_one_over_K[loc_cell]   = one_over_K[glob_cell];
+              }
+            }
+          }
+          const bool own_array = true;
+          CWConstCoefficient local_one_over_rho_coef(local_one_over_rho, own_array);
+          CWConstCoefficient local_one_over_K_coef(local_one_over_K, own_array);
+
+          compute_basis(ccell, param.method.gms_nb, param.method.gms_ni,
+                        local_one_over_rho_coef, local_one_over_K_coef,
+                        R[iz*param.method.gms_Nx*param.method.gms_Ny +
+                          iy*param.method.gms_Nx + ix]);
+
+          offset_x += n_fine_x;
+        }
+        offset_y += n_fine_y;
+      }
+      offset_z += n_fine_z;
+    }
+  }
+
+
+/*
+  const string method_name = "GMsFEM_";
 
   cout << "Open seismograms files..." << flush;
   ofstream *seisU; // for pressure
@@ -281,7 +407,9 @@ void AcousticWave::run_DG_serial() const
        << "\n\ttime of snapshots = " << time_of_snapshots
        << "\n\ttime of seismograms = " << time_of_seismograms << endl;
 
+*/
   delete fec;
 }
+
 
 

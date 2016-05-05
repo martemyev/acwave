@@ -23,6 +23,10 @@ void AcousticWave::run()
   {
     run_DG();
   }
+  else if (!strcmp(param.method.name, "gmsfem") || !strcmp(param.method.name, "GMsFEM"))
+  {
+    run_GMsFEM();
+  }
   else
   {
     MFEM_ABORT("Unknown method to be used: " + string(param.method.name));

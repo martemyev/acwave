@@ -9,7 +9,7 @@ using namespace mfem;
 
 
 
-void AcousticWave::run_FEM()
+void AcousticWave::run_FEM() const
 {
 #if defined(MFEM_USE_MPI)
   run_FEM_parallel();
@@ -20,7 +20,19 @@ void AcousticWave::run_FEM()
 
 
 
-void AcousticWave::run_FEM_serial()
+void AcousticWave::run_FEM_parallel() const
+{
+  int size;
+  MPI_Comm_size(MPI_COMM_WORLD, &size);
+  if (size == 1)
+    run_FEM_serial();
+  else
+    MFEM_ABORT("NOT implemented");
+}
+
+
+
+void AcousticWave::run_FEM_serial() const
 {
   MFEM_VERIFY(param.mesh, "The mesh is not initialized");
 

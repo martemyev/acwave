@@ -29,6 +29,10 @@ public:
 
   const char* meshfile; ///< name of file with mesh
 
+  double get_hx() const { return sx / nx; }
+  double get_hy() const { return sy / ny; }
+  double get_hz() const { return sz / nz; }
+
   void AddOptions(mfem::OptionsParser& args);
   void check_parameters(int dim) const;
 
@@ -133,7 +137,7 @@ public:
   ~MethodParameters() { }
 
   int order; ///< finite element order
-  const char *name; ///< FEM, SEM, DG
+  const char *name; ///< FEM, SEM, DG, GMsFEM
 
   /**
    * Parameters of the DG method.
@@ -142,6 +146,13 @@ public:
    * sigma = +1, kappa = 0: the method of Baumann and Oden
    */
   double dg_sigma, dg_kappa;
+
+  /**
+   * Parameters of the GMsFEM method
+   */
+  int gms_Nx, gms_Ny, gms_Nz; // number of coarse cells
+  int gms_nb, gms_ni; // number of basis functions
+
 
   void AddOptions(mfem::OptionsParser& args);
   void check_parameters() const;

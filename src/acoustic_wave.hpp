@@ -22,18 +22,26 @@ public:
 private:
   const Parameters& param;
 
-  void run_FEM();
-  void run_SEM();
-  void run_DG();
+  void run_FEM() const;
+  void run_SEM() const;
+  void run_DG() const;
+  void run_GMsFEM() const;
 
-  void run_FEM_serial();
-  void run_SEM_serial();
-  void run_DG_serial();
+  void run_FEM_serial() const;
+  void run_SEM_serial() const;
+  void run_DG_serial() const;
+  void run_GMsFEM_serial() const;
 #if defined(MFEM_USE_MPI)
-  void run_FEM_parallel();
-  void run_SEM_parallel();
-  void run_DG_parallel();
+  void run_FEM_parallel() const;
+  void run_SEM_parallel() const;
+  void run_DG_parallel() const;
+  void run_GMsFEM_parallel() const;
 #endif
+
+  void compute_basis(mfem::Mesh *fine_mesh, int n_boundary_bf, int n_interior_bf,
+                     mfem::Coefficient &one_over_rho_coef,
+                     mfem::Coefficient &one_over_K_coef,
+                     mfem::DenseMatrix &R) const;
 };
 
 
@@ -114,5 +122,20 @@ void open_seismo_outs(std::ofstream* &seisU, const Parameters &param,
 
 void output_seismograms(const Parameters& param, const mfem::Mesh& mesh,
                         const mfem::GridFunction &U, std::ofstream* &seisU);
+
+extern "C" void dsygvd_(int *ITYPE,
+                        char *JOBZ,
+                        char *UPLO,
+                        int *N,
+                        double *A,
+                        int *LDA,
+                        double *B,
+                        int *LDB,
+                        double *W,
+                        double *WORK,
+                        int *LWORK,
+                        int *IWORK,
+                        int *LIWORK,
+                        int *INFO);
 
 #endif // ACOUSTIC_WAVE_HPP
