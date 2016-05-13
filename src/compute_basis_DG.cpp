@@ -80,25 +80,7 @@ void solve_dsygvd(const DenseMatrix &A, const DenseMatrix &B, DenseMatrix &eigen
 
 
 
-// helper function
-void get_bdr_vdofs(const mfem::FiniteElementSpace& fespace,
-                   const mfem::Array<int>& ess_bdr,
-                   std::vector<int>& bdr_vdofs)
-{
-  mfem::Array<int> ess_vdofs;
-  fespace.GetEssentialVDofs(ess_bdr, ess_vdofs); // bdr dofs are marked by -1
-  bdr_vdofs.clear();
-  bdr_vdofs.reserve(ess_vdofs.Size());
-  for (int i = 0; i < ess_vdofs.Size(); ++i) {
-    if (ess_vdofs[i] < 0)
-      bdr_vdofs.push_back(i);
-  }
-}
-
-
-
-
-void AcousticWave::compute_basis(Mesh *fine_mesh, int n_boundary_bf, int n_interior_bf,
+void AcousticWave::compute_basis_DG(Mesh *fine_mesh, int n_boundary_bf, int n_interior_bf,
                                  Coefficient &one_over_rho_coef,
                                  Coefficient &one_over_K_coef,
                                  DenseMatrix &R) const
@@ -111,50 +93,36 @@ void AcousticWave::compute_basis(Mesh *fine_mesh, int n_boundary_bf, int n_inter
   FiniteElementSpace fespace(fine_mesh, &fec);
   cout << "done. Time = " << chrono.RealTime() << " sec" << endl;
 
-  mfem::Array<int> ess_bdr(fine_mesh->bdr_attributes.Max());
-  ess_bdr = 1;
-  std::vector<int> bdr_vdofs;
-  get_bdr_vdofs(fespace, ess_bdr, bdr_vdofs);
-
-  Array<int> ess_tdof_list;
-  if (fine_mesh->bdr_attributes.Size())
-  {
-    Array<int> ess_bdr(fine_mesh->bdr_attributes.Max());
-    ess_bdr = 1;
-    fespace.GetEssentialTrueDofs(ess_bdr, ess_tdof_list);
-  }
-  if (ess_tdof_list.Size() == 0)
-    ess_tdof_list.Append(0);
-
   chrono.Clear();
   cout << "Snapshot matrix..." << flush;
-  DenseMatrix W(fespace.GetVSize(), ess_tdof_list.Size());
+  DenseMatrix W;
   {
 
-//    DG_FECollection fec(param.method.order, param.dimension);
-//    FiniteElementSpace fespace(fine_mesh, &fec);
+    H1_FECollection CG_fec(param.method.order, param.dimension);
+    FiniteElementSpace CG_fespace(fine_mesh, &CG_fec);
 
-    BilinearForm stif(&fespace);
+    Array<int> ess_tdof_list;
+    if (fine_mesh->bdr_attributes.Size())
+    {
+      Array<int> ess_bdr(fine_mesh->bdr_attributes.Max());
+      ess_bdr = 1;
+      CG_fespace.GetEssentialTrueDofs(ess_bdr, ess_tdof_list);
+    }
+
+    W.SetSize(fespace.GetVSize(), ess_tdof_list.Size());
+
+    BilinearForm stif(&CG_fespace);
     stif.AddDomainIntegrator(new DiffusionIntegrator(one_over_rho_coef));
-    stif.AddInteriorFaceIntegrator(
-          new DGDiffusionIntegrator(one_over_rho_coef,
-                                    param.method.dg_sigma,
-                                    param.method.dg_kappa));
-    stif.AddBdrFaceIntegrator(
-          new DGDiffusionIntegrator(one_over_rho_coef,
-                                    param.method.dg_sigma,
-                                    param.method.dg_kappa));
     stif.Assemble();
 
-    Vector b(fespace.GetVSize()); // RHS (it's always 0 in the loop)
-    Vector x;
+    Vector b(CG_fespace.GetVSize()); // RHS (it's always 0 in the loop)
 
     const int maxiter = 1000;
     const double rtol = 1e-12;
     const double atol = 1e-24;
     for (int bd = 0; bd < ess_tdof_list.Size(); ++bd)
     {
-      W.GetColumnReference(bd, x);
+      Vector x(CG_fespace.GetVSize());
       x = 0.;
       x(ess_tdof_list[bd]) = 1.;
       b = 0.;
@@ -167,6 +135,17 @@ void AcousticWave::compute_basis(Mesh *fine_mesh, int n_boundary_bf, int n_inter
       mfem::PCG(A, precond, B, X, 0, maxiter, rtol, atol);
 
       stif.RecoverFEMSolution(X, b, x);
+
+      GridFunction CG_X;
+      CG_X.Update(&CG_fespace, x, 0);
+      GridFunctionCoefficient grFC(&CG_X);
+
+      GridFunction DG_X(&fespace);
+      DG_X.ProjectCoefficient(grFC);
+
+      Vector y;
+      W.GetColumnReference(bd, y);
+      y = DG_X;
     }
 
     {
@@ -183,29 +162,29 @@ void AcousticWave::compute_basis(Mesh *fine_mesh, int n_boundary_bf, int n_inter
                   << "window_title 'Snapshot " << bd+1 << '/' << ess_tdof_list.Size()
                   << "'" << std::endl;
 
-        char c;
-        std::cout << "press (q)uit or (c)ontinue --> " << std::flush;
-        std::cin >> c;
-        if (c != 'c')
-          break;
+//        char c;
+//        std::cout << "press (q)uit or (c)ontinue --> " << std::flush;
+//        std::cin >> c;
+//        if (c != 'c')
+//          break;
       }
       mode_sock.close();
     }
   }
   cout << "done. Time = " << chrono.RealTime() << " sec" << endl;
-
+/*
   chrono.Clear();
   cout << "Stif matrix..." << flush;
   BilinearForm stif(&fespace);
   stif.AddDomainIntegrator(new DiffusionIntegrator(one_over_rho_coef));
-  stif.AddInteriorFaceIntegrator(
-        new DGDiffusionIntegrator(one_over_rho_coef,
-                                  param.method.dg_sigma,
-                                  param.method.dg_kappa));
-  stif.AddBdrFaceIntegrator(
-        new DGDiffusionIntegrator(one_over_rho_coef,
-                                  param.method.dg_sigma,
-                                  param.method.dg_kappa));
+//  stif.AddInteriorFaceIntegrator(
+//        new DGDiffusionIntegrator(one_over_rho_coef,
+//                                  param.method.dg_sigma,
+//                                  param.method.dg_kappa));
+//  stif.AddBdrFaceIntegrator(
+//        new DGDiffusionIntegrator(one_over_rho_coef,
+//                                  param.method.dg_sigma,
+//                                  param.method.dg_kappa));
   stif.Assemble();
   stif.Finalize();
   cout << "done. Time = " << chrono.RealTime() << " sec" << endl;
@@ -219,7 +198,8 @@ void AcousticWave::compute_basis(Mesh *fine_mesh, int n_boundary_bf, int n_inter
   chrono.Clear();
   cout << "Edge mass matrix..." << flush;
   BilinearForm edge_mass(&fespace);
-  edge_mass.AddBoundaryIntegrator(new MassIntegrator(one_over_K_coef));
+//  edge_mass.AddBoundaryIntegrator(new MassIntegrator(one_over_K_coef));
+//  edge_mass.AddBdrFaceIntegrator(new MassIntegrator(one_over_K_coef));
   edge_mass.Assemble();
   edge_mass.Finalize();
   cout << "done. Time = " << chrono.RealTime() << " sec" << endl;
@@ -239,12 +219,37 @@ void AcousticWave::compute_basis(Mesh *fine_mesh, int n_boundary_bf, int n_inter
   DenseMatrix boundary_basis(fespace.GetVSize(), n_boundary_bf);
   Mult(W, selected_eigenvectors, boundary_basis);
 
+  {
+    char vishost[] = "localhost";
+    int  visport   = 19916;
+    socketstream mode_sock(vishost, visport);
+    mode_sock.precision(8);
+    for (int bf = 0; bf < n_boundary_bf; ++bf) {
+      Vector x;
+      boundary_basis.GetColumn(bf, x);
+      GridFunction X;
+      X.Update(&fespace, x, 0);
+      mode_sock << "solution\n" << *fine_mesh << X
+                << "window_title 'Boundary basis " << bf+1 << '/' << n_boundary_bf
+                << "'" << std::endl;
+
+      char c;
+      std::cout << "press (q)uit or (c)ontinue --> " << std::flush;
+      std::cin >> c;
+      if (c != 'c')
+        break;
+    }
+    mode_sock.close();
+  }
+
   for (int i = 0; i < n_boundary_bf; ++i)
   {
     for (int j = 0; j < fespace.GetVSize(); ++j)
       R(j, i) = boundary_basis(j, i);
   }
+  */
 
+  R.SetSize(fespace.GetVSize(), n_boundary_bf + n_interior_bf);
   {
     ParMesh par_fine_mesh(MPI_COMM_SELF, *fine_mesh);
     cout << "Parallel FE space generation..." << flush;
@@ -264,6 +269,7 @@ void AcousticWave::compute_basis(Mesh *fine_mesh, int n_boundary_bf, int n_inter
                                     param.method.dg_sigma,
                                     param.method.dg_kappa));
     par_stif.Assemble();
+    par_stif.Finalize();
     HypreParMatrix *par_S = par_stif.ParallelAssemble();
     cout << "done. Time = " << chrono.RealTime() << " sec" << endl;
     chrono.Clear();
@@ -272,6 +278,7 @@ void AcousticWave::compute_basis(Mesh *fine_mesh, int n_boundary_bf, int n_inter
     ParBilinearForm par_mass(&par_fespace);
     par_mass.AddDomainIntegrator(new MassIntegrator(one_over_K_coef));
     par_mass.Assemble();
+    par_mass.Finalize();
     HypreParMatrix *par_M = par_mass.ParallelAssemble();
     cout << "done. Time = " << chrono.RealTime() << " sec" << endl;
     chrono.Clear();
@@ -304,7 +311,31 @@ void AcousticWave::compute_basis(Mesh *fine_mesh, int n_boundary_bf, int n_inter
 
     delete par_M;
     delete par_S;
+
+    {
+      char vishost[] = "localhost";
+      int  visport   = 19916;
+      socketstream mode_sock(vishost, visport);
+      mode_sock.precision(8);
+      for (int bf = 0; bf < n_interior_bf; ++bf) {
+        Vector x;
+        R.GetColumn(n_boundary_bf + bf, x);
+        GridFunction X;
+        X.Update(&fespace, x, 0);
+        mode_sock << "solution\n" << *fine_mesh << X
+                  << "window_title 'Interior basis " << bf+1 << '/' << n_interior_bf
+                  << "'" << std::endl;
+
+        char c;
+        std::cout << "press (q)uit or (c)ontinue --> " << std::flush;
+        std::cin >> c;
+        if (c != 'c')
+          break;
+      }
+      mode_sock.close();
+    }
   }
 
 }
+
 

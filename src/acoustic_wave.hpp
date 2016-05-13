@@ -38,7 +38,12 @@ private:
   void run_GMsFEM_parallel() const;
 #endif
 
-  void compute_basis(mfem::Mesh *fine_mesh, int n_boundary_bf, int n_interior_bf,
+  void compute_basis_DG(mfem::Mesh *fine_mesh, int n_boundary_bf, int n_interior_bf,
+                     mfem::Coefficient &one_over_rho_coef,
+                     mfem::Coefficient &one_over_K_coef,
+                     mfem::DenseMatrix &R) const;
+
+  void compute_basis_CG(mfem::Mesh *fine_mesh, int n_boundary_bf, int n_interior_bf,
                      mfem::Coefficient &one_over_rho_coef,
                      mfem::Coefficient &one_over_K_coef,
                      mfem::DenseMatrix &R) const;
@@ -122,6 +127,9 @@ void open_seismo_outs(std::ofstream* &seisU, const Parameters &param,
 
 void output_seismograms(const Parameters& param, const mfem::Mesh& mesh,
                         const mfem::GridFunction &U, std::ofstream* &seisU);
+
+void solve_dsygvd(const mfem::DenseMatrix &A, const mfem::DenseMatrix &B,
+                  mfem::DenseMatrix &eigenvectors);
 
 extern "C" void dsygvd_(int *ITYPE,
                         char *JOBZ,

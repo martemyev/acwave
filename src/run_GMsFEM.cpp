@@ -7,6 +7,8 @@
 using namespace std;
 using namespace mfem;
 
+//#define BASIS_DG
+
 
 
 void AcousticWave::run_GMsFEM() const
@@ -227,9 +229,15 @@ void AcousticWave::run_GMsFEM_serial() const
         CWConstCoefficient local_one_over_rho_coef(local_one_over_rho, own_array);
         CWConstCoefficient local_one_over_K_coef(local_one_over_K, own_array);
 
-        compute_basis(ccell, param.method.gms_nb, param.method.gms_ni,
-                      local_one_over_rho_coef, local_one_over_K_coef,
-                      R[iy*param.method.gms_Nx + ix]);
+#ifdef BASIS_DG
+        compute_basis_DG(ccell, param.method.gms_nb, param.method.gms_ni,
+                         local_one_over_rho_coef, local_one_over_K_coef,
+                         R[iy*param.method.gms_Nx + ix]);
+#else
+        compute_basis_CG(ccell, param.method.gms_nb, param.method.gms_ni,
+                         local_one_over_rho_coef, local_one_over_K_coef,
+                         R[iy*param.method.gms_Nx + ix]);
+#endif
 
         offset_x += n_fine_x;
       }
@@ -288,10 +296,17 @@ void AcousticWave::run_GMsFEM_serial() const
           CWConstCoefficient local_one_over_rho_coef(local_one_over_rho, own_array);
           CWConstCoefficient local_one_over_K_coef(local_one_over_K, own_array);
 
-          compute_basis(ccell, param.method.gms_nb, param.method.gms_ni,
-                        local_one_over_rho_coef, local_one_over_K_coef,
-                        R[iz*param.method.gms_Nx*param.method.gms_Ny +
-                          iy*param.method.gms_Nx + ix]);
+#ifdef BASIS_DG
+          compute_basis_DG(ccell, param.method.gms_nb, param.method.gms_ni,
+                           local_one_over_rho_coef, local_one_over_K_coef,
+                           R[iz*param.method.gms_Nx*param.method.gms_Ny +
+                             iy*param.method.gms_Nx + ix]);
+#else
+          compute_basis_CG(ccell, param.method.gms_nb, param.method.gms_ni,
+                           local_one_over_rho_coef, local_one_over_K_coef,
+                           R[iz*param.method.gms_Nx*param.method.gms_Ny +
+                             iy*param.method.gms_Nx + ix]);
+#endif
 
           offset_x += n_fine_x;
         }
