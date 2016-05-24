@@ -5,6 +5,10 @@
 using namespace std;
 using namespace mfem;
 
+//#define VIEW_SNAPSHOT_SPACE
+//#define VIEW_BOUNDARY_BASIS
+//#define VIEW_INTERIOR_BASIS
+#define VIEW_DG_BASIS
 
 
 static
@@ -66,28 +70,30 @@ void compute_boundary_basis_CG(const Parameters &param,
       stif.RecoverFEMSolution(X, b, x);
     }
 
-//    {
-//      char vishost[] = "localhost";
-//      int  visport   = 19916;
-//      socketstream mode_sock(vishost, visport);
-//      mode_sock.precision(8);
-//      for (int bd = 0; bd < ess_tdof_list.Size(); ++bd) {
-//        Vector x;
-//        W.GetColumn(bd, x);
-//        GridFunction X;
-//        X.Update(&fespace, x, 0);
-//        mode_sock << "solution\n" << *fine_mesh << X
-//                  << "window_title 'Snapshot " << bd+1 << '/' << ess_tdof_list.Size()
-//                  << "'" << std::endl;
+#if defined(VIEW_SNAPSHOT_SPACE)
+    {
+      char vishost[] = "localhost";
+      int  visport   = 19916;
+      socketstream mode_sock(vishost, visport);
+      mode_sock.precision(8);
+      for (int bd = 0; bd < ess_tdof_list.Size(); ++bd) {
+        Vector x;
+        W.GetColumn(bd, x);
+        GridFunction X;
+        X.Update(&fespace, x, 0);
+        mode_sock << "solution\n" << *fine_mesh << X
+                  << "window_title 'Snapshot " << bd+1 << '/' << ess_tdof_list.Size()
+                  << "'" << std::endl;
 
-//        char c;
-//        std::cout << "press (q)uit or (c)ontinue --> " << std::flush;
-//        std::cin >> c;
-//        if (c != 'c')
-//          break;
-//      }
-//      mode_sock.close();
-//    }
+        char c;
+        std::cout << "press (q)uit or (c)ontinue --> " << std::flush;
+        std::cin >> c;
+        if (c != 'c')
+          break;
+      }
+      mode_sock.close();
+    }
+#endif
   }
   cout << "done. Time = " << chrono.RealTime() << " sec" << endl;
 
@@ -130,15 +136,10 @@ void compute_boundary_basis_CG(const Parameters &param,
   R.SetSize(fespace.GetVSize(), n_boundary_bf + n_interior_bf);
   R.CopyCols(boundary_basis, 0, n_boundary_bf-1);
 
-//  for (int i = 0; i < n_boundary_bf; ++i)
-//  {
-//    for (int j = 0; j < fespace.GetVSize(); ++j)
-//      R(j, i) = boundary_basis(j, i);
-//  }
-
   delete WTEMW;
   delete WTSW;
 
+#if defined(VIEW_BOUNDARY_BASIS)
   {
     char vishost[] = "localhost";
     int  visport   = 19916;
@@ -161,6 +162,7 @@ void compute_boundary_basis_CG(const Parameters &param,
     }
     mode_sock.close();
   }
+#endif
 }
 
 
@@ -236,6 +238,7 @@ void compute_interior_basis_CG(const Parameters &param,
   delete par_M;
   delete par_S;
 
+#if defined(VIEW_INTERIOR_BASIS)
   {
     char vishost[] = "localhost";
     int  visport   = 19916;
@@ -258,97 +261,68 @@ void compute_interior_basis_CG(const Parameters &param,
     }
     mode_sock.close();
   }
+#endif
 }
 
 
 
-//static
-//void compute_interior_basis_CG_()
-//{
-//  Mesh mesh(10, 10, Element::QUADRILATERAL, 1, 100., 100.);
-//  int dim = mesh.Dimension();
+static
+void project_to_DG_space(const Parameters &param, Mesh *fine_mesh,
+                         const DenseMatrix &R_CG, DenseMatrix &R_DG)
+{
+  StopWatch chrono;
+  chrono.Start();
 
-//  ParMesh par_mesh(MPI_COMM_SELF, mesh);
+  cout << "FE space generation..." << flush;
+  H1_FECollection CG_fec(param.method.order, param.dimension);
+  DG_FECollection DG_fec(param.method.order, param.dimension);
 
-//  int order = 1;
-//  H1_FECollection fec(order, dim);
-//  ParFiniteElementSpace par_fespace(&par_mesh, &fec);
+  FiniteElementSpace CG_fespace(fine_mesh, &CG_fec);
+  FiniteElementSpace DG_fespace(fine_mesh, &DG_fec);
+  cout << "done. Time = " << chrono.RealTime() << " sec" << endl;
 
-//  Array<int> ess_bdr;
-//  if (par_mesh.bdr_attributes.Size())
-//  {
-//    ess_bdr.SetSize(par_mesh.bdr_attributes.Max());
-//    ess_bdr = 1;
-//  }
+  R_DG.SetSize(DG_fespace.GetVSize(), R_CG.NumCols());
 
-//  ConstantCoefficient one(1.);
+  Vector x, y;
+  GridFunction vec_CG;
+  for (int c = 0; c < R_CG.NumCols(); ++c)
+  {
+    R_CG.GetColumn(c, x);
+    vec_CG.Update(&CG_fespace, x, 0);
+    GridFunctionCoefficient grid_coef(&vec_CG);
 
-//  ParBilinearForm par_stif(&par_fespace);
-//  par_stif.AddDomainIntegrator(new DiffusionIntegrator(one));
-//  par_stif.Assemble();
-//  par_stif.EliminateEssentialBCDiag(ess_bdr, 1.0);
-//  par_stif.Finalize();
-//  HypreParMatrix *par_S = par_stif.ParallelAssemble();
+    GridFunction vec_DG(&DG_fespace);
+    vec_DG.ProjectCoefficient(grid_coef);
 
-//  ParBilinearForm par_mass(&par_fespace);
-//  par_mass.AddDomainIntegrator(new MassIntegrator(one));
-//  par_mass.Assemble();
-//  par_mass.EliminateEssentialBCDiag(ess_bdr, numeric_limits<double>::min());
-//  par_mass.Finalize();
-//  HypreParMatrix *par_M = par_mass.ParallelAssemble();
+    R_DG.GetColumnReference(c, y);
+    y = vec_DG;
+  }
 
-//  HypreBoomerAMG amg(*par_S);
-//  amg.SetPrintLevel(0);
+#if defined(VIEW_DG_BASIS)
+  {
+    char vishost[] = "localhost";
+    int  visport   = 19916;
+    socketstream mode_sock(vishost, visport);
+    mode_sock.precision(8);
+    for (int col = 0; col < R_DG.NumCols(); ++col) {
+      Vector x;
+      R_DG.GetColumn(col, x);
+      GridFunction X;
+      X.Update(&DG_fespace, x, 0);
+      mode_sock << "solution\n" << *fine_mesh << X
+                << "window_title 'R_DG column " << col+1 << '/'
+                << R_DG.NumCols() << "'" << std::endl;
 
-//  int n_modes = 10;
-
-//  HypreLOBPCG lobpcg(MPI_COMM_SELF);
-//  lobpcg.SetNumModes(n_modes);
-//  lobpcg.SetPreconditioner(amg);
-//  lobpcg.SetMaxIter(100);
-//  lobpcg.SetTol(1e-8);
-//  lobpcg.SetPrecondUsageMode(1);
-//  lobpcg.SetPrintLevel(1);
-//  lobpcg.SetMassMatrix(*par_M);
-//  lobpcg.SetOperator(*par_S);
-
-//  lobpcg.Solve();
-
-//  DenseMatrix modes(par_fespace.GetVSize(), n_modes);
-
-//  for (int i = 0; i < n_modes; ++i)
-//  {
-//    Vector x;
-//    modes.GetColumnReference(i, x);
-//    x = lobpcg.GetEigenvector(i);
-//  }
-
-//  delete par_M;
-//  delete par_S;
-
-//  {
-//    char vishost[] = "localhost";
-//    int  visport   = 19916;
-//    socketstream mode_sock(vishost, visport);
-//    mode_sock.precision(8);
-//    for (int bf = 0; bf < n_modes; ++bf) {
-//      Vector x;
-//      modes.GetColumn(bf, x);
-//      GridFunction X;
-//      X.Update(&par_fespace, x, 0);
-//      mode_sock << "solution\n" << par_mesh << X
-//                << "window_title 'CG interior basis " << bf+1 << '/'
-//                << n_modes << "'" << std::endl;
-
-//      char c;
-//      std::cout << "press (q)uit or (c)ontinue --> " << std::flush;
-//      std::cin >> c;
-//      if (c != 'c')
-//        break;
-//    }
-//    mode_sock.close();
-//  }
-//}
+      char c;
+      std::cout << "press (q)uit or (c)ontinue --> " << std::flush;
+      std::cin >> c;
+      if (c != 'c')
+        break;
+    }
+    mode_sock.close();
+  }
+#endif
+}
 
 
 
@@ -357,9 +331,11 @@ void AcousticWave::compute_basis_CG(Mesh *fine_mesh, int n_boundary_bf, int n_in
                                     Coefficient &one_over_K_coef,
                                     DenseMatrix &R) const
 {
+  DenseMatrix R_CG;
   compute_boundary_basis_CG(param, fine_mesh, n_boundary_bf, n_interior_bf,
-                            one_over_rho_coef, one_over_K_coef, R);
+                            one_over_rho_coef, one_over_K_coef, R_CG);
   compute_interior_basis_CG(param, fine_mesh, n_boundary_bf, n_interior_bf,
-                            one_over_rho_coef, one_over_K_coef, R);
+                            one_over_rho_coef, one_over_K_coef, R_CG);
+  project_to_DG_space(param, fine_mesh, R_CG, R);
 }
 
