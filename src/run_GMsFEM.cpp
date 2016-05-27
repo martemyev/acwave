@@ -238,6 +238,7 @@ void AcousticWave::run_GMsFEM_serial() const
                          local_one_over_rho_coef, local_one_over_K_coef,
                          R[iy*param.method.gms_Nx + ix]);
 #endif
+        delete ccell;
 
         offset_x += n_fine_x;
       }
@@ -307,6 +308,7 @@ void AcousticWave::run_GMsFEM_serial() const
                            R[iz*param.method.gms_Nx*param.method.gms_Ny +
                              iy*param.method.gms_Nx + ix]);
 #endif
+          delete ccell;
 
           offset_x += n_fine_x;
         }
@@ -316,8 +318,70 @@ void AcousticWave::run_GMsFEM_serial() const
     }
   }
 
+  // global sparse R matrix
+  int n_rows = 0;
+  int n_cols = 0;
+  int n_non_zero = 0;
+  for (size_t i = 0; i < R.size(); ++i)
+  {
+    const int h = R[i].Height();
+    const int w = R[i].Width();
+    n_rows += w; // transpose
+    n_cols += h; // transpose
+    n_non_zero += h * w;
+  }
+  MFEM_VERIFY(n_cols == S_fine.Height(), "Dimensions mismatch");
+  int *Ri = new int[n_rows + 1];
+  int *Rj = new int[n_non_zero];
+  double *Rdata = new double[n_non_zero];
 
-/*
+  Ri[0] = 0;
+  int k = 0;
+  int p = 0;
+  int offset = 0;
+  for (size_t r = 0; r < R.size(); ++r)
+  {
+    const int h = R[r].Height();
+    const int w = R[r].Width();
+    for (int i = 0; i < w; ++i)
+    {
+      Ri[k+1] = Ri[k] + h;
+      ++k;
+
+      for (int j = 0; j < h; ++j)
+      {
+        Rj[p] = offset + j;
+        Rdata[p] = R[r](j, i);
+        ++p;
+      }
+    }
+    offset += h;
+  }
+
+  SparseMatrix R_global(Ri, Rj, Rdata, n_rows, n_cols);
+  SparseMatrix *R_global_T = Transpose(R_global);
+
+  SparseMatrix *M_coarse = RAP(M_fine, R_global);
+  SparseMatrix *S_coarse = RAP(S_fine, R_global);
+
+  const int N = M_coarse->Height();
+
+  Vector b_coarse(N);
+  R_global.Mult(b_fine, b_coarse);
+
+  const SparseMatrix& CopyFrom = *M_coarse;
+  const int nnz = CopyFrom.NumNonZeroElems();
+  const bool ownij  = false;
+  const bool ownval = true;
+  SparseMatrix Sys(CopyFrom.GetI(), CopyFrom.GetJ(), new double[nnz],
+                   CopyFrom.Height(), CopyFrom.Width(), ownij, ownval,
+                   CopyFrom.areColumnsSorted());
+  Sys = 0.0;
+  //Sys += D;
+  Sys += *M_coarse;
+  GSSmoother prec(Sys);
+
+
   const string method_name = "GMsFEM_";
 
   cout << "Open seismograms files..." << flush;
@@ -326,17 +390,16 @@ void AcousticWave::run_GMsFEM_serial() const
   cout << "done. Time = " << chrono.RealTime() << " sec" << endl;
   chrono.Clear();
 
-  GridFunction u_0(&fespace); // pressure
-  GridFunction u_1(&fespace);
-  GridFunction u_2(&fespace);
-  u_0 = 0.0;
-  u_1 = 0.0;
-  u_2 = 0.0;
+  GridFunction u_0(&fespace); // fine scale pressure
+//  GridFunction u_2(&fespace);
+
+  Vector U_0(N); // coarse scale pressure
+  U_0 = 0.0;
+  Vector U_1 = U_0;
+  Vector U_2 = U_0;
 
   const int n_time_steps = param.T / param.dt + 0.5; // nearest integer
   const int tenth = 0.1 * n_time_steps;
-
-  const int N = u_0.Size();
 
   cout << "N time steps = " << n_time_steps
        << "\nTime loop..." << endl;
@@ -362,13 +425,13 @@ void AcousticWave::run_GMsFEM_serial() const
   double time_of_seismograms = 0.;
   for (int time_step = 1; time_step <= n_time_steps; ++time_step)
   {
-    Vector y = u_1; y *= 2.0; y -= u_2;        // y = 2*u_1 - u_2
+    Vector y = U_1; y *= 2.0; y -= U_2;        // y = 2*u_1 - u_2
 
     Vector z0; z0.SetSize(N);                  // z0 = M * (2*u_1 - u_2)
-    M.Mult(y, z0);
+    M_coarse->Mult(y, z0);
 
-    Vector z1; z1.SetSize(N); S.Mult(u_1, z1);     // z1 = S * u_1
-    Vector z2 = b; z2 *= time_values[time_step-1]; // z2 = timeval*source
+    Vector z1; z1.SetSize(N); S_coarse->Mult(U_1, z1);     // z1 = S * u_1
+    Vector z2 = b_coarse; z2 *= time_values[time_step-1]; // z2 = timeval*source
 
     // y = dt^2 * (S*u_1 - timeval*source), where it can be
     // y = dt^2 * (S*u_1 - ricker*pointforce) OR
@@ -384,12 +447,12 @@ void AcousticWave::run_GMsFEM_serial() const
 //    RHS += y;
 
     // (M+D)*x_0 = M*(2*x_1-x_2) - dt^2*(S*x_1-r*b) + D*x_2
-    PCG(Sys, prec, RHS, u_0, 0, 200, 1e-12, 0.0);
+    PCG(Sys, prec, RHS, U_0, 0, 200, 1e-12, 0.0);
 
     // Compute and print the L^2 norm of the error
     if (time_step % tenth == 0) {
       cout << "step " << time_step << " / " << n_time_steps
-           << " ||solution||_{L^2} = " << u_0.Norml2() << endl;
+           << " ||solution||_{L^2} = " << U_0.Norml2() << endl;
     }
 
     if (time_step % param.step_snap == 0) {
@@ -397,21 +460,23 @@ void AcousticWave::run_GMsFEM_serial() const
       timer.Start();
       visit_dc.SetCycle(time_step);
       visit_dc.SetTime(time_step*param.dt);
+      R_global_T->Mult(U_0, u_0);
       visit_dc.Save();
       timer.Stop();
       time_of_snapshots += timer.UserTime();
     }
 
-    if (time_step % param.step_seis == 0) {
-      StopWatch timer;
-      timer.Start();
-      output_seismograms(param, *param.mesh, u_0, seisU);
-      timer.Stop();
-      time_of_seismograms += timer.UserTime();
-    }
+//    if (time_step % param.step_seis == 0) {
+//      StopWatch timer;
+//      timer.Start();
+//      R_global_T.Mult(U_0, u_0);
+//      output_seismograms(param, *param.mesh, u_0, seisU);
+//      timer.Stop();
+//      time_of_seismograms += timer.UserTime();
+//    }
 
-    u_2 = u_1;
-    u_1 = u_0;
+    U_2 = U_1;
+    U_1 = U_0;
   }
 
   time_loop_timer.Stop();
@@ -422,9 +487,10 @@ void AcousticWave::run_GMsFEM_serial() const
        << "\n\ttime of snapshots = " << time_of_snapshots
        << "\n\ttime of seismograms = " << time_of_seismograms << endl;
 
-*/
+  delete S_coarse;
+  delete M_coarse;
+  delete R_global_T;
+
   delete fec;
 }
-
-
 

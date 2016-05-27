@@ -8,7 +8,7 @@ using namespace mfem;
 //#define VIEW_SNAPSHOT_SPACE
 //#define VIEW_BOUNDARY_BASIS
 //#define VIEW_INTERIOR_BASIS
-#define VIEW_DG_BASIS
+//#define VIEW_DG_BASIS
 
 
 static
@@ -134,7 +134,11 @@ void compute_boundary_basis_CG(const Parameters &param,
   Mult(W, selected_eigenvectors, boundary_basis);
 
   R.SetSize(fespace.GetVSize(), n_boundary_bf + n_interior_bf);
-  R.CopyCols(boundary_basis, 0, n_boundary_bf-1);
+  for (int col = 0; col < n_boundary_bf; ++col)
+  {
+    for (int row = 0; row < boundary_basis.Height(); ++row)
+      R(row, col) = boundary_basis(row, col);
+  }
 
   delete WTEMW;
   delete WTSW;

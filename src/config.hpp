@@ -4,7 +4,7 @@
 #include <string>
 
 // MFEM config file
-#include "/u/artemyev/projects/mfem/pdebug/include/config/config.hpp"
+#include "/u/artemyev/projects/mfem/parallel/include/config/config.hpp"
 
 #ifndef nullptr
   #define nullptr NULL
