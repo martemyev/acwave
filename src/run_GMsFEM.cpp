@@ -8,6 +8,7 @@ using namespace std;
 using namespace mfem;
 
 //#define BASIS_DG
+#define OUTPUT_MATRIX
 
 
 
@@ -126,14 +127,13 @@ void AcousticWave::run_GMsFEM_serial() const
   cout << "done. Time = " << chrono.RealTime() << " sec" << endl;
   chrono.Clear();
 
-#if defined(OUTPUT_MASS_MATRIX)
+#if defined(OUTPUT_MATRIX)
   {
-    cout << "Output mass matrix..." << flush;
-    ofstream mout("mass_mat.dat");
-    mass_fine.PrintMatlab(mout);
-    cout << "M.nnz = " << M.NumNonZeroElems() << endl;
-    cout << "done. Time = " << chrono.RealTime() << " sec" << endl;
     chrono.Clear();
+    cout << "Output mass matrix..." << flush;
+    ofstream mout("m_fine_mat.dat");
+    mass_fine.PrintMatlab(mout);
+    cout << "done. Time = " << chrono.RealTime() << " sec" << endl;
   }
 #endif
 
@@ -359,10 +359,41 @@ void AcousticWave::run_GMsFEM_serial() const
   }
 
   SparseMatrix R_global(Ri, Rj, Rdata, n_rows, n_cols);
+
+#if defined(OUTPUT_MATRIX)
+  {
+    chrono.Clear();
+    cout << "Output R_global matrix..." << flush;
+    ofstream mout("r_global_mat.dat");
+    R_global.PrintMatlab(mout);
+    cout << "done. Time = " << chrono.RealTime() << " sec" << endl;
+  }
+#endif
+
+
   SparseMatrix *R_global_T = Transpose(R_global);
 
   SparseMatrix *M_coarse = RAP(M_fine, R_global);
   SparseMatrix *S_coarse = RAP(S_fine, R_global);
+
+#if defined(OUTPUT_MATRIX)
+  {
+    chrono.Clear();
+    cout << "Output M_coarse matrix..." << flush;
+    ofstream mout("m_coarse_mat.dat");
+    M_coarse->PrintMatlab(mout);
+    cout << "done. Time = " << chrono.RealTime() << " sec" << endl;
+  }
+#endif
+#if defined(OUTPUT_MATRIX)
+  {
+    chrono.Clear();
+    cout << "Output S_coarse matrix..." << flush;
+    ofstream mout("s_coarse_mat.dat");
+    S_coarse->PrintMatlab(mout);
+    cout << "done. Time = " << chrono.RealTime() << " sec" << endl;
+  }
+#endif
 
   const int N = M_coarse->Height();
 
