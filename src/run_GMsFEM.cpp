@@ -48,6 +48,41 @@ void fill_up_n_fine_cells_per_coarse(int n_fine, int n_coarse,
 
 
 
+static void time_step(const SparseMatrix &M, const SparseMatrix &S,
+                      const Vector &b, double timeval, double dt,
+                      const SparseMatrix &SysMat, Solver &Prec,
+                      Vector &U_0, Vector &U_1, Vector &U_2)
+{
+  Vector y = U_1; y *= 2.0; y -= U_2;        // y = 2*u_1 - u_2
+
+  Vector z0; z0.SetSize(U_0.Size());         // z0 = M * (2*u_1 - u_2)
+  M.Mult(y, z0);
+
+  Vector z1; z1.SetSize(U_0.Size()); S.Mult(U_1, z1); // z1 = S * u_1
+  Vector z2 = b; z2 *= timeval; // z2 = timeval*source
+
+  // y = dt^2 * (S*u_1 - timeval*source), where it can be
+  // y = dt^2 * (S*u_1 - ricker*pointforce) OR
+  // y = dt^2 * (S*u_1 - gaussfirstderivative*momenttensor)
+  y = z1; y -= z2; y *= dt*dt;
+
+  // RHS = M*(2*u_1-u_2) - dt^2*(S*u_1-timeval*source)
+  Vector RHS = z0; RHS -= y;
+
+//    for (int i = 0; i < N; ++i) y[i] = diagD[i] * u_2[i]; // y = D * u_2
+
+  // RHS = M*(2*u_1-u_2) - dt^2*(S*u_1-timeval*source) + D*u_2
+//    RHS += y;
+
+  // (M+D)*x_0 = M*(2*x_1-x_2) - dt^2*(S*x_1-r*b) + D*x_2
+  PCG(SysMat, Prec, RHS, U_0, 0, 200, 1e-12, 0.0);
+
+  U_2 = U_1;
+  U_1 = U_0;
+}
+
+
+
 void AcousticWave::run_GMsFEM_serial() const
 {
   MFEM_VERIFY(param.mesh, "The mesh is not initialized");
@@ -127,16 +162,6 @@ void AcousticWave::run_GMsFEM_serial() const
   cout << "done. Time = " << chrono.RealTime() << " sec" << endl;
   chrono.Clear();
 
-#if defined(OUTPUT_MATRIX)
-  {
-    chrono.Clear();
-    cout << "Output mass matrix..." << flush;
-    ofstream mout("m_fine_mat.dat");
-    mass_fine.PrintMatlab(mout);
-    cout << "done. Time = " << chrono.RealTime() << " sec" << endl;
-  }
-#endif
-
 //  cout << "Damp matrix..." << flush;
 //  VectorMassIntegrator *damp_int = new VectorMassIntegrator(rho_damp_coef);
 //  damp_int->SetIntRule(GLL_rule);
@@ -149,6 +174,12 @@ void AcousticWave::run_GMsFEM_serial() const
 //  D *= 0.5*param.dt*omega;
 //  cout << "done. Time = " << chrono.RealTime() << " sec" << endl;
 //  chrono.Clear();
+
+  SparseMatrix SysFine(M_fine);
+  SysFine = 0.0;
+  //SysFine += D;
+  SysFine += M_fine;
+  GSSmoother PrecFine(SysFine);
 
   cout << "Fine scale RHS vector... " << flush;
   LinearForm b_fine(&fespace);
@@ -208,7 +239,7 @@ void AcousticWave::run_GMsFEM_serial() const
       {
         const int n_fine_x = n_fine_cell_per_coarse_x[ix];
         const double SX = n_fine_x * hx;
-        Mesh *ccell =
+        Mesh *ccell_fine_mesh =
             new Mesh(n_fine_x, n_fine_y, Element::QUADRILATERAL, gen_edges, SX, SY);
 
         double *local_one_over_rho = new double[n_fine_x * n_fine_y];
@@ -230,15 +261,15 @@ void AcousticWave::run_GMsFEM_serial() const
         CWConstCoefficient local_one_over_K_coef(local_one_over_K, own_array);
 
 #ifdef BASIS_DG
-        compute_basis_DG(ccell, param.method.gms_nb, param.method.gms_ni,
+        compute_basis_DG(ccell_fine_mesh, param.method.gms_nb, param.method.gms_ni,
                          local_one_over_rho_coef, local_one_over_K_coef,
                          R[iy*param.method.gms_Nx + ix]);
 #else
-        compute_basis_CG(ccell, param.method.gms_nb, param.method.gms_ni,
+        compute_basis_CG(ccell_fine_mesh, param.method.gms_nb, param.method.gms_ni,
                          local_one_over_rho_coef, local_one_over_K_coef,
                          R[iy*param.method.gms_Nx + ix]);
 #endif
-        delete ccell;
+        delete ccell_fine_mesh;
 
         offset_x += n_fine_x;
       }
@@ -269,7 +300,7 @@ void AcousticWave::run_GMsFEM_serial() const
         {
           const int n_fine_x = n_fine_cell_per_coarse_x[ix];
           const double SX = n_fine_x * hx;
-          Mesh *ccell =
+          Mesh *ccell_fine_mesh =
               new Mesh(n_fine_cell_per_coarse_x[ix],
                        n_fine_cell_per_coarse_y[iy],
                        n_fine_cell_per_coarse_z[iz],
@@ -298,17 +329,17 @@ void AcousticWave::run_GMsFEM_serial() const
           CWConstCoefficient local_one_over_K_coef(local_one_over_K, own_array);
 
 #ifdef BASIS_DG
-          compute_basis_DG(ccell, param.method.gms_nb, param.method.gms_ni,
+          compute_basis_DG(ccell_fine_mesh, param.method.gms_nb, param.method.gms_ni,
                            local_one_over_rho_coef, local_one_over_K_coef,
                            R[iz*param.method.gms_Nx*param.method.gms_Ny +
                              iy*param.method.gms_Nx + ix]);
 #else
-          compute_basis_CG(ccell, param.method.gms_nb, param.method.gms_ni,
+          compute_basis_CG(ccell_fine_mesh, param.method.gms_nb, param.method.gms_ni,
                            local_one_over_rho_coef, local_one_over_K_coef,
                            R[iz*param.method.gms_Nx*param.method.gms_Ny +
                              iy*param.method.gms_Nx + ix]);
 #endif
-          delete ccell;
+          delete ccell_fine_mesh;
 
           offset_x += n_fine_x;
         }
@@ -317,6 +348,20 @@ void AcousticWave::run_GMsFEM_serial() const
       offset_z += n_fine_z;
     }
   }
+
+#if defined(OUTPUT_MATRIX)
+  {
+    chrono.Clear();
+    cout << "Output R local matrices..." << flush;
+    for (size_t r = 0; r < R.size(); ++r) {
+      string fname = string(param.output_dir) + "/r" + d2s(r) + "_local_mat.dat";
+      ofstream mout(fname.c_str());
+      MFEM_VERIFY(mout, "Cannot open file " + fname);
+      R[r].PrintMatlab(mout);
+    }
+    cout << "done. Time = " << chrono.RealTime() << " sec" << endl;
+  }
+#endif
 
   // global sparse R matrix
   int n_rows = 0;
@@ -360,58 +405,76 @@ void AcousticWave::run_GMsFEM_serial() const
 
   SparseMatrix R_global(Ri, Rj, Rdata, n_rows, n_cols);
 
-#if defined(OUTPUT_MATRIX)
-  {
-    chrono.Clear();
-    cout << "Output R_global matrix..." << flush;
-    ofstream mout("r_global_mat.dat");
-    R_global.PrintMatlab(mout);
-    cout << "done. Time = " << chrono.RealTime() << " sec" << endl;
-  }
-#endif
-
-
   SparseMatrix *R_global_T = Transpose(R_global);
 
   SparseMatrix *M_coarse = RAP(M_fine, R_global);
   SparseMatrix *S_coarse = RAP(S_fine, R_global);
 
+  Vector b_coarse(M_coarse->Height());
+  R_global.Mult(b_fine, b_coarse);
+
+  SparseMatrix SysCoarse(*M_coarse);
+  SysCoarse = 0.0;
+  //SysCoarse += D;
+  SysCoarse += *M_coarse;
+  GSSmoother PrecCoarse(SysCoarse);
+
 #if defined(OUTPUT_MATRIX)
+  {
+    chrono.Clear();
+    cout << "Output R_global matrix..." << flush;
+    const string fname = string(param.output_dir) + "/r_global_mat.dat";
+    ofstream mout(fname.c_str());
+    MFEM_VERIFY(mout, "Cannot open file " + fname);
+    R_global.PrintMatlab(mout);
+    cout << "done. Time = " << chrono.RealTime() << " sec" << endl;
+  }
+  {
+    chrono.Clear();
+    cout << "Output R_global_T matrix..." << flush;
+    const string fname = string(param.output_dir) + "/r_global_mat_t.dat";
+    ofstream mout(fname.c_str());
+    MFEM_VERIFY(mout, "Cannot open file " + fname);
+    R_global_T->PrintMatlab(mout);
+    cout << "done. Time = " << chrono.RealTime() << " sec" << endl;
+  }
+  {
+    chrono.Clear();
+    cout << "Output M_fine matrix..." << flush;
+    const string fname = string(param.output_dir) + "/m_fine_mat.dat";
+    ofstream mout(fname.c_str());
+    MFEM_VERIFY(mout, "Cannot open file " + fname);
+    M_fine.PrintMatlab(mout);
+    cout << "done. Time = " << chrono.RealTime() << " sec" << endl;
+  }
+  {
+    chrono.Clear();
+    cout << "Output S_fine matrix..." << flush;
+    const string fname = string(param.output_dir) + "/s_fine_mat.dat";
+    ofstream mout(fname.c_str());
+    MFEM_VERIFY(mout, "Cannot open file " + fname);
+    S_fine.PrintMatlab(mout);
+    cout << "done. Time = " << chrono.RealTime() << " sec" << endl;
+  }
   {
     chrono.Clear();
     cout << "Output M_coarse matrix..." << flush;
-    ofstream mout("m_coarse_mat.dat");
+    const string fname = string(param.output_dir) + "/m_coarse_mat.dat";
+    ofstream mout(fname.c_str());
+    MFEM_VERIFY(mout, "Cannot open file " + fname);
     M_coarse->PrintMatlab(mout);
     cout << "done. Time = " << chrono.RealTime() << " sec" << endl;
   }
-#endif
-#if defined(OUTPUT_MATRIX)
   {
     chrono.Clear();
     cout << "Output S_coarse matrix..." << flush;
-    ofstream mout("s_coarse_mat.dat");
+    const string fname = string(param.output_dir) + "/s_coarse_mat.dat";
+    ofstream mout(fname.c_str());
+    MFEM_VERIFY(mout, "Cannot open file " + fname);
     S_coarse->PrintMatlab(mout);
     cout << "done. Time = " << chrono.RealTime() << " sec" << endl;
   }
 #endif
-
-  const int N = M_coarse->Height();
-
-  Vector b_coarse(N);
-  R_global.Mult(b_fine, b_coarse);
-
-  const SparseMatrix& CopyFrom = *M_coarse;
-  const int nnz = CopyFrom.NumNonZeroElems();
-  const bool ownij  = false;
-  const bool ownval = true;
-  SparseMatrix Sys(CopyFrom.GetI(), CopyFrom.GetJ(), new double[nnz],
-                   CopyFrom.Height(), CopyFrom.Width(), ownij, ownval,
-                   CopyFrom.areColumnsSorted());
-  Sys = 0.0;
-  //Sys += D;
-  Sys += *M_coarse;
-  GSSmoother prec(Sys);
-
 
   const string method_name = "GMsFEM_";
 
@@ -421,13 +484,16 @@ void AcousticWave::run_GMsFEM_serial() const
   cout << "done. Time = " << chrono.RealTime() << " sec" << endl;
   chrono.Clear();
 
-  GridFunction u_0(&fespace); // fine scale pressure
-//  GridFunction u_2(&fespace);
-
-  Vector U_0(N); // coarse scale pressure
+  Vector U_0(M_coarse->Height()); // coarse scale pressure
   U_0 = 0.0;
   Vector U_1 = U_0;
   Vector U_2 = U_0;
+  GridFunction u_0(&fespace); // fine scale projected from coarse scale
+
+  GridFunction u_fine_0(&fespace); // fine scale pressure
+  u_fine_0 = 0.0;
+  Vector u_fine_1 = u_fine_0;
+  Vector u_fine_2 = u_fine_0;
 
   const int n_time_steps = param.T / param.dt + 0.5; // nearest integer
   const int tenth = 0.1 * n_time_steps;
@@ -445,59 +511,56 @@ void AcousticWave::run_GMsFEM_serial() const
   }
 
   const string name = method_name + param.extra_string;
-  const string pref_path = (string)param.output_dir + "/" + SNAPSHOTS_DIR;
+  const string pref_path = string(param.output_dir) + "/" + SNAPSHOTS_DIR;
   VisItDataCollection visit_dc(name.c_str(), param.mesh);
   visit_dc.SetPrefixPath(pref_path.c_str());
-  visit_dc.RegisterField("pressure", &u_0);
+  visit_dc.RegisterField("fine_pressure", &u_fine_0);
+  visit_dc.RegisterField("coarse_pressure", &u_0);
+  {
+    visit_dc.SetCycle(0);
+    visit_dc.SetTime(0.0);
+    Vector u_tmp(u_fine_0.Size());
+    R_global_T->Mult(U_0, u_tmp);
+    u_0.Update(&fespace, u_tmp, 0);
+    visit_dc.Save();
+  }
 
   StopWatch time_loop_timer;
   time_loop_timer.Start();
   double time_of_snapshots = 0.;
   double time_of_seismograms = 0.;
-  for (int time_step = 1; time_step <= n_time_steps; ++time_step)
+  for (int t_step = 1; t_step <= n_time_steps; ++t_step)
   {
-    Vector y = U_1; y *= 2.0; y -= U_2;        // y = 2*u_1 - u_2
-
-    Vector z0; z0.SetSize(N);                  // z0 = M * (2*u_1 - u_2)
-    M_coarse->Mult(y, z0);
-
-    Vector z1; z1.SetSize(N); S_coarse->Mult(U_1, z1);     // z1 = S * u_1
-    Vector z2 = b_coarse; z2 *= time_values[time_step-1]; // z2 = timeval*source
-
-    // y = dt^2 * (S*u_1 - timeval*source), where it can be
-    // y = dt^2 * (S*u_1 - ricker*pointforce) OR
-    // y = dt^2 * (S*u_1 - gaussfirstderivative*momenttensor)
-    y = z1; y -= z2; y *= param.dt*param.dt;
-
-    // RHS = M*(2*u_1-u_2) - dt^2*(S*u_1-timeval*source)
-    Vector RHS = z0; RHS -= y;
-
-//    for (int i = 0; i < N; ++i) y[i] = diagD[i] * u_2[i]; // y = D * u_2
-
-    // RHS = M*(2*u_1-u_2) - dt^2*(S*u_1-timeval*source) + D*u_2
-//    RHS += y;
-
-    // (M+D)*x_0 = M*(2*x_1-x_2) - dt^2*(S*x_1-r*b) + D*x_2
-    PCG(Sys, prec, RHS, U_0, 0, 200, 1e-12, 0.0);
-
-    // Compute and print the L^2 norm of the error
-    if (time_step % tenth == 0) {
-      cout << "step " << time_step << " / " << n_time_steps
-           << " ||solution||_{L^2} = " << U_0.Norml2() << endl;
+    {
+      time_step(*M_coarse, *S_coarse, b_coarse, time_values[t_step-1],
+                param.dt, SysCoarse, PrecCoarse, U_0, U_1, U_2);
+    }
+    {
+//      time_step(M_fine, S_fine, b_fine, time_values[t_step-1],
+//                param.dt, SysFine, PrecFine, u_fine_0, u_fine_1, u_fine_2);
     }
 
-    if (time_step % param.step_snap == 0) {
+    // Compute and print the L^2 norm of the error
+    if (t_step % tenth == 0) {
+      cout << "step " << t_step << " / " << n_time_steps
+           << " ||U||_{L^2} = " << U_0.Norml2()
+           << " ||u||_{L^2} = " << u_fine_0.Norml2() << endl;
+    }
+
+    if (t_step % param.step_snap == 0) {
       StopWatch timer;
       timer.Start();
-      visit_dc.SetCycle(time_step);
-      visit_dc.SetTime(time_step*param.dt);
-      R_global_T->Mult(U_0, u_0);
+      visit_dc.SetCycle(t_step);
+      visit_dc.SetTime(t_step*param.dt);
+      Vector u_tmp(u_fine_0.Size());
+      R_global_T->Mult(U_0, u_tmp);
+      u_0.Update(&fespace, u_tmp, 0);
       visit_dc.Save();
       timer.Stop();
       time_of_snapshots += timer.UserTime();
     }
 
-//    if (time_step % param.step_seis == 0) {
+//    if (t_step % param.step_seis == 0) {
 //      StopWatch timer;
 //      timer.Start();
 //      R_global_T.Mult(U_0, u_0);
@@ -505,9 +568,6 @@ void AcousticWave::run_GMsFEM_serial() const
 //      timer.Stop();
 //      time_of_seismograms += timer.UserTime();
 //    }
-
-    U_2 = U_1;
-    U_1 = U_0;
   }
 
   time_loop_timer.Stop();
