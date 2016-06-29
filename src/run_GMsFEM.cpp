@@ -222,19 +222,23 @@ void AcousticWave::run_GMsFEM_serial() const
 
   const int gen_edges = 1;
 
+  std::vector<std::vector<int> > local2global;
   std::vector<DenseMatrix> R;
 
   if (param.dimension == 2)
   {
-    R.resize(param.method.gms_Nx * param.method.gms_Ny);
+    const int n_coarse_cells = param.method.gms_Nx * param.method.gms_Ny;
+    local2global.resize(n_coarse_cells);
+    R.resize(n_coarse_cells);
 
-    int offset_x = 0, offset_y = 0;
+    int offset_x, offset_y = 0;
 
     for (int iy = 0; iy < param.method.gms_Ny; ++iy)
     {
       const int n_fine_y = n_fine_cell_per_coarse_y[iy];
       const double SY = n_fine_y * hy;
 
+      offset_x = 0;
       for (int ix = 0; ix < param.method.gms_Nx; ++ix)
       {
         const int n_fine_x = n_fine_cell_per_coarse_x[ix];
@@ -260,15 +264,46 @@ void AcousticWave::run_GMsFEM_serial() const
         CWConstCoefficient local_one_over_rho_coef(local_one_over_rho, own_array);
         CWConstCoefficient local_one_over_K_coef(local_one_over_K, own_array);
 
+        const int coarse_cell = iy*param.method.gms_Nx + ix;
+
 #ifdef BASIS_DG
         compute_basis_DG(ccell_fine_mesh, param.method.gms_nb, param.method.gms_ni,
                          local_one_over_rho_coef, local_one_over_K_coef,
-                         R[iy*param.method.gms_Nx + ix]);
+                         R[coarse_cell]);
 #else
         compute_basis_CG(ccell_fine_mesh, param.method.gms_nb, param.method.gms_ni,
                          local_one_over_rho_coef, local_one_over_K_coef,
-                         R[iy*param.method.gms_Nx + ix]);
+                         R[coarse_cell]);
 #endif
+
+        // initialize with all -1 to check that all values are defined later
+        local2global[coarse_cell].resize(R[coarse_cell].Height(), -1);
+        DG_FECollection DG_fec(param.method.order, param.dimension);
+        FiniteElementSpace DG_fespace(ccell_fine_mesh, &DG_fec);
+        Array<int> loc_dofs, glob_dofs;
+        for (int fiy = 0; fiy < n_fine_y; ++fiy)
+        {
+          for (int fix = 0; fix < n_fine_x; ++fix)
+          {
+            const int loc_cell = fiy*n_fine_x + fix;
+            const int glob_cell = (offset_y + fiy) * param.grid.nx +
+                                  (offset_x + fix);
+
+            DG_fespace.GetElementVDofs(loc_cell, loc_dofs);
+            fespace.GetElementVDofs(glob_cell, glob_dofs);
+            MFEM_VERIFY(loc_dofs.Size() == glob_dofs.Size(), "Dimensions mismatch");
+
+            for (int di = 0; di < loc_dofs.Size(); ++di)
+              local2global[coarse_cell][loc_dofs[di]] = glob_dofs[di];
+          }
+        }
+
+        // check that all values were defined
+        for (size_t ii = 0; ii < local2global[coarse_cell].size(); ++ii) {
+          MFEM_VERIFY(local2global[coarse_cell][ii] >= 0, "Some values of local2global "
+                      "vector were not defined");
+        }
+
         delete ccell_fine_mesh;
 
         offset_x += n_fine_x;
@@ -284,7 +319,9 @@ void AcousticWave::run_GMsFEM_serial() const
 
     const double hz = param.grid.get_hz();
 
-    R.resize(param.method.gms_Nx * param.method.gms_Ny * param.method.gms_Nz);
+    const int n_coarse_cells = param.method.gms_Nx * param.method.gms_Ny * param.method.gms_Nz;
+    local2global.resize(n_coarse_cells);
+    R.resize(n_coarse_cells);
 
     int offset_x = 0, offset_y = 0, offset_z = 0;
 
@@ -349,20 +386,6 @@ void AcousticWave::run_GMsFEM_serial() const
     }
   }
 
-#if defined(OUTPUT_MATRIX)
-  {
-    chrono.Clear();
-    cout << "Output R local matrices..." << flush;
-    for (size_t r = 0; r < R.size(); ++r) {
-      string fname = string(param.output_dir) + "/r" + d2s(r) + "_local_mat.dat";
-      ofstream mout(fname.c_str());
-      MFEM_VERIFY(mout, "Cannot open file " + fname);
-      R[r].PrintMatlab(mout);
-    }
-    cout << "done. Time = " << chrono.RealTime() << " sec" << endl;
-  }
-#endif
-
   // global sparse R matrix
   int n_rows = 0;
   int n_cols = 0;
@@ -383,7 +406,7 @@ void AcousticWave::run_GMsFEM_serial() const
   Ri[0] = 0;
   int k = 0;
   int p = 0;
-  int offset = 0;
+//  int offset = 0;
   for (size_t r = 0; r < R.size(); ++r)
   {
     const int h = R[r].Height();
@@ -395,12 +418,12 @@ void AcousticWave::run_GMsFEM_serial() const
 
       for (int j = 0; j < h; ++j)
       {
-        Rj[p] = offset + j;
+        Rj[p] = local2global[r][j];
         Rdata[p] = R[r](j, i);
         ++p;
       }
     }
-    offset += h;
+//    offset += h;
   }
 
   SparseMatrix R_global(Ri, Rj, Rdata, n_rows, n_cols);
@@ -420,6 +443,17 @@ void AcousticWave::run_GMsFEM_serial() const
   GSSmoother PrecCoarse(SysCoarse);
 
 #if defined(OUTPUT_MATRIX)
+  {
+    chrono.Clear();
+    cout << "Output R local matrices..." << flush;
+    for (size_t r = 0; r < R.size(); ++r) {
+      const string fname = string(param.output_dir) + "/r" + d2s(r) + "_local_mat.dat";
+      ofstream mout(fname.c_str());
+      MFEM_VERIFY(mout, "Cannot open file " + fname);
+      R[r].PrintMatlab(mout);
+    }
+    cout << "done. Time = " << chrono.RealTime() << " sec" << endl;
+  }
   {
     chrono.Clear();
     cout << "Output R_global matrix..." << flush;
