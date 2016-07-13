@@ -555,7 +555,7 @@ void AcousticWave::run_GMsFEM_serial() const
     visit_dc.SetTime(0.0);
     Vector u_tmp(u_fine_0.Size());
     R_global_T->Mult(U_0, u_tmp);
-    u_0.Update(&fespace, u_tmp, 0);
+    u_0.MakeRef(&fespace, u_tmp, 0);
     visit_dc.Save();
   }
 
@@ -588,7 +588,7 @@ void AcousticWave::run_GMsFEM_serial() const
       visit_dc.SetTime(t_step*param.dt);
       Vector u_tmp(u_fine_0.Size());
       R_global_T->Mult(U_0, u_tmp);
-      u_0.Update(&fespace, u_tmp, 0);
+      u_0.MakeRef(&fespace, u_tmp, 0);
       visit_dc.Save();
       timer.Stop();
       time_of_snapshots += timer.UserTime();

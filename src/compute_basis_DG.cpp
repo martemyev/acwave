@@ -137,7 +137,7 @@ void AcousticWave::compute_basis_DG(Mesh *fine_mesh, int n_boundary_bf, int n_in
       stif.RecoverFEMSolution(X, b, x);
 
       GridFunction CG_X;
-      CG_X.Update(&CG_fespace, x, 0);
+      CG_X.MakeRef(&CG_fespace, x, 0);
       GridFunctionCoefficient grFC(&CG_X);
 
       GridFunction DG_X(&fespace);
@@ -157,7 +157,7 @@ void AcousticWave::compute_basis_DG(Mesh *fine_mesh, int n_boundary_bf, int n_in
         Vector x;
         W.GetColumn(bd, x);
         GridFunction X;
-        X.Update(&fespace, x, 0);
+        X.MakeRef(&fespace, x, 0);
         mode_sock << "solution\n" << *fine_mesh << X
                   << "window_title 'Snapshot " << bd+1 << '/' << ess_tdof_list.Size()
                   << "'" << std::endl;
@@ -321,7 +321,7 @@ void AcousticWave::compute_basis_DG(Mesh *fine_mesh, int n_boundary_bf, int n_in
         Vector x;
         R.GetColumn(n_boundary_bf + bf, x);
         GridFunction X;
-        X.Update(&fespace, x, 0);
+        X.MakeRef(&fespace, x, 0);
         mode_sock << "solution\n" << *fine_mesh << X
                   << "window_title 'Interior basis " << bf+1 << '/' << n_interior_bf
                   << "'" << std::endl;

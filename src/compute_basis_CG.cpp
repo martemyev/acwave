@@ -292,7 +292,7 @@ void project_to_DG_space(const Parameters &param, Mesh *fine_mesh,
   for (int c = 0; c < R_CG.NumCols(); ++c)
   {
     R_CG.GetColumn(c, x);
-    vec_CG.Update(&CG_fespace, x, 0);
+    vec_CG.MakeRef(&CG_fespace, x, 0);
     GridFunctionCoefficient grid_coef(&vec_CG);
 
     GridFunction vec_DG(&DG_fespace);
