@@ -85,6 +85,9 @@ void AcousticWave::compute_basis_DG(Mesh *fine_mesh, int n_boundary_bf, int n_in
                                  Coefficient &one_over_K_coef,
                                  DenseMatrix &R) const
 {
+
+  MFEM_ABORT("This function is not completely implemented!");
+
   StopWatch chrono;
   chrono.Start();
 

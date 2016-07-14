@@ -209,8 +209,8 @@ void AcousticWave::run_DG_serial() const
                                              cur_time - param.dt);
   }
 
-  const string name = method_name + param.extra_string;
-  const string pref_path = (string)param.output_dir + "/" + SNAPSHOTS_DIR;
+  const string name = method_name + param.output.extra_string;
+  const string pref_path = (string)param.output.directory + "/" + SNAPSHOTS_DIR;
   VisItDataCollection visit_dc(name.c_str(), param.mesh);
   visit_dc.SetPrefixPath(pref_path.c_str());
   visit_dc.RegisterField("pressure", &u_0);

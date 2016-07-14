@@ -5,10 +5,6 @@
 using namespace std;
 using namespace mfem;
 
-//#define VIEW_SNAPSHOT_SPACE
-//#define VIEW_BOUNDARY_BASIS
-//#define VIEW_INTERIOR_BASIS
-//#define VIEW_DG_BASIS
 
 
 static
@@ -70,7 +66,7 @@ void compute_boundary_basis_CG(const Parameters &param,
       stif.RecoverFEMSolution(X, b, x);
     }
 
-#if defined(VIEW_SNAPSHOT_SPACE)
+    if (param.output.view_snapshot_space)
     {
       char vishost[] = "localhost";
       int  visport   = 19916;
@@ -80,7 +76,7 @@ void compute_boundary_basis_CG(const Parameters &param,
         Vector x;
         W.GetColumn(bd, x);
         GridFunction X;
-        X.Update(&fespace, x, 0);
+        X.MakeRef(&fespace, x, 0);
         mode_sock << "solution\n" << *fine_mesh << X
                   << "window_title 'Snapshot " << bd+1 << '/' << ess_tdof_list.Size()
                   << "'" << std::endl;
@@ -93,7 +89,6 @@ void compute_boundary_basis_CG(const Parameters &param,
       }
       mode_sock.close();
     }
-#endif
   }
   cout << "done. Time = " << chrono.RealTime() << " sec" << endl;
 
@@ -143,7 +138,7 @@ void compute_boundary_basis_CG(const Parameters &param,
   delete WTEMW;
   delete WTSW;
 
-#if defined(VIEW_BOUNDARY_BASIS)
+  if (param.output.view_boundary_basis)
   {
     char vishost[] = "localhost";
     int  visport   = 19916;
@@ -153,7 +148,7 @@ void compute_boundary_basis_CG(const Parameters &param,
       Vector x;
       R.GetColumn(bf, x);
       GridFunction X;
-      X.Update(&fespace, x, 0);
+      X.MakeRef(&fespace, x, 0);
       mode_sock << "solution\n" << *fine_mesh << X
                 << "window_title 'CG boundary basis " << bf+1 << '/'
                 << n_boundary_bf << "'" << std::endl;
@@ -166,7 +161,6 @@ void compute_boundary_basis_CG(const Parameters &param,
     }
     mode_sock.close();
   }
-#endif
 }
 
 
@@ -242,7 +236,7 @@ void compute_interior_basis_CG(const Parameters &param,
   delete par_M;
   delete par_S;
 
-#if defined(VIEW_INTERIOR_BASIS)
+  if (param.output.view_interior_basis)
   {
     char vishost[] = "localhost";
     int  visport   = 19916;
@@ -252,7 +246,7 @@ void compute_interior_basis_CG(const Parameters &param,
       Vector x;
       R.GetColumn(n_boundary_bf + bf, x);
       GridFunction X;
-      X.Update(&par_fespace, x, 0);
+      X.MakeRef(&par_fespace, x, 0);
       mode_sock << "solution\n" << par_fine_mesh << X
                 << "window_title 'CG interior basis " << bf+1 << '/'
                 << n_interior_bf << "'" << std::endl;
@@ -265,7 +259,6 @@ void compute_interior_basis_CG(const Parameters &param,
     }
     mode_sock.close();
   }
-#endif
 }
 
 
@@ -302,7 +295,7 @@ void project_to_DG_space(const Parameters &param, Mesh *fine_mesh,
     y = vec_DG;
   }
 
-#if defined(VIEW_DG_BASIS)
+  if (param.output.view_dg_basis)
   {
     char vishost[] = "localhost";
     int  visport   = 19916;
@@ -312,7 +305,7 @@ void project_to_DG_space(const Parameters &param, Mesh *fine_mesh,
       Vector x;
       R_DG.GetColumn(col, x);
       GridFunction X;
-      X.Update(&DG_fespace, x, 0);
+      X.MakeRef(&DG_fespace, x, 0);
       mode_sock << "solution\n" << *fine_mesh << X
                 << "window_title 'R_DG column " << col+1 << '/'
                 << R_DG.NumCols() << "'" << std::endl;
@@ -325,7 +318,6 @@ void project_to_DG_space(const Parameters &param, Mesh *fine_mesh,
     }
     mode_sock.close();
   }
-#endif
 }
 
 

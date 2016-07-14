@@ -162,7 +162,32 @@ private:
   MethodParameters& operator=(const MethodParameters&);
 };
 
+/**
+ * Handle output results and intermediate steps of computations
+ */
+class OutputParameters
+{
+public:
+  OutputParameters();
+  ~OutputParameters() { }
 
+  const char *directory; ///< directory for saving results of computations
+  const char *extra_string; ///< added to output files for distinguishing the
+                            ///< results
+
+  bool coarse_matrices; ///< output coarse matrices (yes, no)
+  bool view_snapshot_space;
+  bool view_boundary_basis;
+  bool view_interior_basis;
+  bool view_dg_basis;
+
+  void AddOptions(mfem::OptionsParser& args);
+  void check_parameters() const;
+
+private:
+  OutputParameters(const OutputParameters&);
+  OutputParameters& operator =(const OutputParameters&);
+};
 
 
 
@@ -182,6 +207,7 @@ public:
   MediaPropertiesParameters media;
   BoundaryConditionsParameters bc;
   MethodParameters method;
+  OutputParameters output;
 
   mfem::Mesh *mesh;
 
@@ -192,10 +218,6 @@ public:
   int step_seis; ///< time step for outputting seismograms (every *th time step)
   const char *receivers_file; ///< file describing the sets of receivers
   std::vector<ReceiversSet*> sets_of_receivers;
-
-  const char *output_dir; ///< directory for saving results of computations
-  const char *extra_string; ///< added to output files for distinguishing the
-                            ///< results
 
   void init(int argc, char **argv);
   void check_parameters() const;

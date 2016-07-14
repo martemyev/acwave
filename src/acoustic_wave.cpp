@@ -121,8 +121,8 @@ void open_seismo_outs(ofstream* &seisU, const Parameters &param,
     const ReceiversSet *rec_set = param.sets_of_receivers[r];
     const string desc = rec_set->description();
 
-    string seismofile = (string)param.output_dir + "/" + SEISMOGRAMS_DIR +
-                        method_name + param.extra_string + desc + "_p.bin";
+    string seismofile = (string)param.output.directory + "/" + SEISMOGRAMS_DIR +
+                        method_name + param.output.extra_string + desc + "_p.bin";
     seisU[r].open(seismofile.c_str(), ios::binary);
     MFEM_VERIFY(seisU[r], "File '" + seismofile + "' can't be opened");
   } // loop for sets of receivers
