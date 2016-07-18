@@ -111,7 +111,7 @@ void AcousticWave::run_DG_serial() const
   cout << "done. Time = " << chrono.RealTime() << " sec" << endl;
   chrono.Clear();
 
-#if defined(OUTPUT_MASS_MATRIX)
+  if (param.output.print_matrices)
   {
     cout << "Output mass matrix..." << flush;
     ofstream mout("mass_mat.dat");
@@ -120,7 +120,6 @@ void AcousticWave::run_DG_serial() const
     cout << "done. Time = " << chrono.RealTime() << " sec" << endl;
     chrono.Clear();
   }
-#endif
 
 //  cout << "Damp matrix..." << flush;
 //  VectorMassIntegrator *damp_int = new VectorMassIntegrator(rho_damp_coef);

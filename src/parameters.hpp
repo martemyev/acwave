@@ -175,8 +175,8 @@ public:
   const char *extra_string; ///< added to output files for distinguishing the
                             ///< results
 
-  bool coarse_matrices; ///< output coarse matrices (yes, no)
-  bool view_snapshot_space;
+  bool print_matrices; ///< output (print to a file) matrices (yes, no)
+  bool view_snapshot_space; ///< view some intermediate results via GLVis
   bool view_boundary_basis;
   bool view_interior_basis;
   bool view_dg_basis;

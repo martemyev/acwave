@@ -441,7 +441,7 @@ void AcousticWave::run_GMsFEM_serial() const
   SysCoarse += *M_coarse;
   GSSmoother PrecCoarse(SysCoarse);
 
-  if (param.output.coarse_matrices)
+  if (param.output.print_matrices)
   {
     {
       chrono.Clear();
