@@ -14,7 +14,12 @@ using namespace mfem;
 void AcousticWave::run_GMsFEM() const
 {
 #if defined(MFEM_USE_MPI)
-  run_GMsFEM_parallel();
+  int size;
+  MPI_Comm_size(MPI_COMM_WORLD, &size);
+  if (size == 1)
+    run_GMsFEM_serial();
+  else
+    run_GMsFEM_parallel();
 #else
   run_GMsFEM_serial();
 #endif
@@ -24,12 +29,7 @@ void AcousticWave::run_GMsFEM() const
 
 void AcousticWave::run_GMsFEM_parallel() const
 {
-  int size;
-  MPI_Comm_size(MPI_COMM_WORLD, &size);
-  if (size == 1)
-    run_GMsFEM_serial();
-  else
-    MFEM_ABORT("NOT implemented");
+  MFEM_ABORT("NOT implemented");
 }
 
 

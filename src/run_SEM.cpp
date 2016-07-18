@@ -13,7 +13,12 @@ using namespace mfem;
 void AcousticWave::run_SEM() const
 {
 #if defined(MFEM_USE_MPI)
-  run_SEM_parallel();
+  int size;
+  MPI_Comm_size(MPI_COMM_WORLD, &size);
+  if (size == 1)
+    run_SEM_serial();
+  else
+    run_SEM_parallel();
 #else
   run_SEM_serial();
 #endif
@@ -23,12 +28,7 @@ void AcousticWave::run_SEM() const
 
 void AcousticWave::run_SEM_parallel() const
 {
-  int size;
-  MPI_Comm_size(MPI_COMM_WORLD, &size);
-  if (size == 1)
-    run_SEM_serial();
-  else
-    MFEM_ABORT("NOT implemented");
+  MFEM_ABORT("NOT implemented");
 }
 
 
@@ -116,7 +116,7 @@ void AcousticWave::run_SEM_serial() const
   cout << "done. Time = " << chrono.RealTime() << " sec" << endl;
   chrono.Clear();
 
-#if defined(OUTPUT_MASS_MATRIX)
+  if (param.output.print_matrices)
   {
     cout << "Output mass matrix..." << flush;
     ofstream mout("mass_mat.dat");
@@ -125,7 +125,6 @@ void AcousticWave::run_SEM_serial() const
     cout << "done. Time = " << chrono.RealTime() << " sec" << endl;
     chrono.Clear();
   }
-#endif
 
 //  cout << "Damp matrix..." << flush;
 //  VectorMassIntegrator *damp_int = new VectorMassIntegrator(rho_damp_coef);
