@@ -11,26 +11,17 @@ using namespace mfem;
 
 
 
+#ifdef MFEM_USE_MPI
 void AcousticWave::run_GMsFEM() const
 {
-#if defined(MFEM_USE_MPI)
   int size;
   MPI_Comm_size(MPI_COMM_WORLD, &size);
   if (size == 1)
     run_GMsFEM_serial();
   else
     run_GMsFEM_parallel();
-#else
-  run_GMsFEM_serial();
-#endif
 }
-
-
-
-void AcousticWave::run_GMsFEM_parallel() const
-{
-  MFEM_ABORT("NOT implemented");
-}
+#endif // MFEM_USE_MPI
 
 
 
@@ -82,6 +73,7 @@ static void time_step(const SparseMatrix &M, const SparseMatrix &S,
 
 
 
+#ifdef MFEM_USE_MPI
 void AcousticWave::run_GMsFEM_serial() const
 {
   MFEM_VERIFY(param.mesh, "The mesh is not initialized");
@@ -618,4 +610,21 @@ void AcousticWave::run_GMsFEM_serial() const
 
   delete fec;
 }
+#endif // MFEM_USE_MPI
+
+
+
+#ifdef MFEM_USE_MPI
+void AcousticWave::run_GMsFEM_parallel() const
+{
+  MFEM_VERIFY(param.mesh, "The serial mesh is not initialized");
+  MFEM_VERIFY(param.par_mesh, "The parallel mesh is not initialized");
+
+  int myid, nproc;
+  MPI_Comm_rank(MPI_COMM_WORLD, &myid);
+  MPI_Comm_size(MPI_COMM_WORLD, &nproc);
+
+
+}
+#endif // MFEM_USE_MPI
 

@@ -66,11 +66,11 @@ void GridParameters::check_parameters(int dim) const
 //
 //------------------------------------------------------------------------------
 SourceParameters::SourceParameters()
-  : location(500.0, 500.0, 500.0)
+  : location(0.5, 0.5, 0.5)
   , frequency(10.0)
   , scale(1e+6)
   , spatial_function("gauss")
-  , gauss_support(10.0)
+  , gauss_support(0.01)
   , plane_wave(false)
 { }
 
@@ -105,8 +105,8 @@ void SourceParameters::check_parameters() const
 //
 //------------------------------------------------------------------------------
 MediaPropertiesParameters::MediaPropertiesParameters()
-  : rho(2500)
-  , vp(3500)
+  : rho(2.5)
+  , vp(3.5)
   , rhofile(DEFAULT_FILE_NAME)
   , vpfile(DEFAULT_FILE_NAME)
   , rho_array(nullptr)
@@ -176,7 +176,7 @@ BoundaryConditionsParameters::BoundaryConditionsParameters()
   , top   ("abs")
   , front ("abs")
   , back  ("abs")
-  , damp_layer(100.0)
+  , damp_layer(0.1)
   , damp_power(3.0)
 { }
 
@@ -227,7 +227,7 @@ MethodParameters::MethodParameters()
   : order(1)
   , name("sem")
   , dg_sigma(-1.) // SIPDG
-  , dg_kappa(1.)
+  , dg_kappa(10.)
   , gms_Nx(1), gms_Ny(1), gms_Nz(1)
   , gms_nb(1), gms_ni(1)
 { }
@@ -314,6 +314,7 @@ Parameters::Parameters()
   , method()
   , output()
   , mesh(nullptr)
+  , par_mesh(nullptr)
   , T(1.0)
   , dt(1e-3)
   , step_snap(1000)
@@ -327,10 +328,16 @@ Parameters::~Parameters()
     delete sets_of_receivers[i];
 
   delete mesh;
+  delete par_mesh;
 }
 
 void Parameters::init(int argc, char **argv)
 {
+  int myid = 0;
+#ifdef MFEM_USE_MPI
+  MPI_Comm_rank(MPI_COMM_WORLD, &myid);
+#endif
+
   OptionsParser args(argc, argv);
 
   args.AddOption(&dimension, "-d", "--dim", "Dimension of wave simulation (2 or 3)");
@@ -360,11 +367,13 @@ void Parameters::init(int argc, char **argv)
   check_parameters();
 
 
-  cout << "Mesh initialization..." << endl;
+  if (myid == 0)
+    cout << "Mesh initialization..." << endl;
   const int generate_edges = 1;
   if (strcmp(grid.meshfile, DEFAULT_FILE_NAME))
   {
-    cout << "  Reading mesh from " << grid.meshfile << endl;
+    if (myid == 0)
+      cout << "  Reading mesh from " << grid.meshfile << endl;
     ifstream in(grid.meshfile);
     MFEM_VERIFY(in, "File can't be opened");
     const int refine = 0;
@@ -382,16 +391,20 @@ void Parameters::init(int argc, char **argv)
       zmin = std::min(zmin, v[2]);
       zmax = std::max(zmax, v[2]);
     }
-    cout << "min coord: x " << xmin << " y " << ymin << " z " << zmin
-         << "\nmax coord: x " << xmax << " y " << ymax << " z " << zmax
-         << "\n";
+    if (myid == 0)
+    {
+      cout << "min coord: x " << xmin << " y " << ymin << " z " << zmin
+           << "\nmax coord: x " << xmax << " y " << ymax << " z " << zmax
+           << "\n";
+    }
     grid.sx = xmax - xmin;
     grid.sy = ymax - ymin;
     grid.sz = zmax - zmin;
   }
   else
   {
-    cout << "  Generating mesh" << endl;
+    if (myid == 0)
+      cout << "  Generating mesh" << endl;
     if (dimension == 2)
     {
       mesh = new Mesh(grid.nx, grid.ny, Element::QUADRILATERAL,
@@ -407,16 +420,19 @@ void Parameters::init(int argc, char **argv)
   MFEM_VERIFY(mesh->Dimension() == dimension, "Unexpected mesh dimension");
   for (int el = 0; el < mesh->GetNE(); ++el)
     mesh->GetElement(el)->SetAttribute(el+1);
-  cout << "Mesh initialization is done" << endl;
+  if (myid == 0)
+    cout << "Mesh initialization is done" << endl;
 
+  par_mesh = new ParMesh(MPI_COMM_WORLD, *mesh);
 
   media.init(mesh->GetNE());
 
   const double min_wavelength = min(media.min_vp, media.min_vp) /
                                 (2.0*source.frequency);
-  cout << "min wavelength = " << min_wavelength << endl;
+  if (myid == 0)
+    cout << "min wavelength = " << min_wavelength << endl;
 
-  if (bc.damp_layer < 2.5*min_wavelength)
+  if (bc.damp_layer < 2.5*min_wavelength && myid == 0)
     mfem_warning("damping layer for absorbing bc should be about 3*wavelength\n");
 
   {

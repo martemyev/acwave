@@ -25,28 +25,32 @@ private:
   void run_FEM() const;
   void run_SEM() const;
   void run_DG() const;
-  void run_GMsFEM() const;
 
   void run_FEM_serial() const;
   void run_SEM_serial() const;
   void run_DG_serial() const;
-  void run_GMsFEM_serial() const;
+
 #if defined(MFEM_USE_MPI)
   void run_FEM_parallel() const;
   void run_SEM_parallel() const;
   void run_DG_parallel() const;
-  void run_GMsFEM_parallel() const;
-#endif
 
+  void run_GMsFEM() const; // uses parallel eigensolver
+  void run_GMsFEM_serial() const; // if only one process is used
+  void run_GMsFEM_parallel() const;
+
+  // uses parallel eigensolver
   void compute_basis_DG(mfem::Mesh *fine_mesh, int n_boundary_bf, int n_interior_bf,
                      mfem::Coefficient &one_over_rho_coef,
                      mfem::Coefficient &one_over_K_coef,
                      mfem::DenseMatrix &R) const;
 
+  // uses parallel eigensolver
   void compute_basis_CG(mfem::Mesh *fine_mesh, int n_boundary_bf, int n_interior_bf,
                      mfem::Coefficient &one_over_rho_coef,
                      mfem::Coefficient &one_over_K_coef,
                      mfem::DenseMatrix &R) const;
+#endif
 };
 
 
