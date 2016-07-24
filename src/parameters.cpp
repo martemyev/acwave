@@ -359,10 +359,12 @@ void Parameters::init(int argc, char **argv)
   args.Parse();
   if (!args.Good())
   {
-    args.PrintUsage(cout);
+    if (myid == 0)
+      args.PrintUsage(cout);
     throw 1;
   }
-  args.PrintOptions(cout);
+  if (myid == 0)
+    args.PrintOptions(cout);
 
   check_parameters();
 

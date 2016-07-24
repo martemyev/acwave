@@ -79,7 +79,6 @@ void AcousticWave::run_GMsFEM_serial() const
   MFEM_VERIFY(param.mesh, "The mesh is not initialized");
 
   StopWatch chrono;
-
   chrono.Start();
 
   const int dim = param.dimension;
@@ -624,7 +623,521 @@ void AcousticWave::run_GMsFEM_parallel() const
   MPI_Comm_rank(MPI_COMM_WORLD, &myid);
   MPI_Comm_size(MPI_COMM_WORLD, &nproc);
 
+  string fileout = string(param.output.directory) + "/outputlog." + d2s(myid);
+  ofstream out(fileout.c_str());
+  MFEM_VERIFY(out, "Cannot open file " << fileout);
 
+  StopWatch chrono;
+  chrono.Start();
+
+  const int dim = param.dimension;
+  const int n_elements = param.mesh->GetNE();
+
+  out << "FE space generation..." << flush;
+  chrono.Clear();
+  DG_FECollection fec(param.method.order, dim);
+  ParFiniteElementSpace fespace(param.par_mesh, &fec);
+  out << "done. Time = " << chrono.RealTime() << " sec" << endl;
+
+  const int n_dofs = fespace.GlobalTrueVSize();
+  out << "Number of unknowns: " << n_dofs << endl;
+
+  double *one_over_rho = new double[n_elements]; // one over density
+  double *one_over_K   = new double[n_elements]; // one over bulk modulus
+
+  double Rho[] = { DBL_MAX, DBL_MIN };
+  double Vp[]  = { DBL_MAX, DBL_MIN };
+  double Kap[] = { DBL_MAX, DBL_MIN };
+
+  for (int i = 0; i < n_elements; ++i)
+  {
+    const double rho = param.media.rho_array[i];
+    const double vp  = param.media.vp_array[i];
+    const double K   = rho*vp*vp;
+
+    MFEM_VERIFY(rho > 0. && vp > 0., "Incorrect media properties arrays");
+
+    Rho[0] = std::min(Rho[0], rho);
+    Rho[1] = std::max(Rho[1], rho);
+    Vp[0]  = std::min(Vp[0], vp);
+    Vp[1]  = std::max(Vp[1], vp);
+    Kap[0] = std::min(Kap[0], K);
+    Kap[1] = std::max(Kap[1], K);
+
+    one_over_rho[i] = 1. / rho;
+    one_over_K[i]   = 1. / K;
+  }
+
+  out << "Rho: min " << Rho[0] << " max " << Rho[1] << endl;
+  out << "Vp:  min " << Vp[0]  << " max " << Vp[1] << endl;
+  out << "Kap: min " << Kap[0] << " max " << Kap[1] << endl;
+
+  const bool own_array = true;
+  CWConstCoefficient one_over_rho_coef(one_over_rho, own_array);
+  CWConstCoefficient one_over_K_coef(one_over_K, own_array);
+
+  out << "Fine scale stif matrix..." << flush;
+  chrono.Clear();
+  ParBilinearForm stif_fine(&fespace);
+  stif_fine.AddDomainIntegrator(new DiffusionIntegrator(one_over_rho_coef));
+  stif_fine.AddInteriorFaceIntegrator(
+        new DGDiffusionIntegrator(one_over_rho_coef,
+                                  param.method.dg_sigma,
+                                  param.method.dg_kappa));
+  stif_fine.AddBdrFaceIntegrator(
+        new DGDiffusionIntegrator(one_over_rho_coef,
+                                  param.method.dg_sigma,
+                                  param.method.dg_kappa));
+  stif_fine.Assemble();
+  stif_fine.Finalize();
+  HypreParMatrix *S_fine = stif_fine.ParallelAssemble();
+  out << "done. Time = " << chrono.RealTime() << " sec" << endl;
+
+
+  out << "Fine scale mass matrix..." << flush;
+  chrono.Clear();
+  ParBilinearForm mass_fine(&fespace);
+  mass_fine.AddDomainIntegrator(new MassIntegrator(one_over_K_coef));
+  mass_fine.Assemble();
+  mass_fine.Finalize();
+  HypreParMatrix *M_fine = mass_fine.ParallelAssemble();
+  out << "done. Time = " << chrono.RealTime() << " sec" << endl;
+
+//  cout << "Damp matrix..." << flush;
+//  VectorMassIntegrator *damp_int = new VectorMassIntegrator(rho_damp_coef);
+//  damp_int->SetIntRule(GLL_rule);
+//  BilinearForm dampM(&fespace);
+//  dampM.AddDomainIntegrator(damp_int);
+//  dampM.Assemble();
+//  dampM.Finalize();
+//  SparseMatrix& D = dampM.SpMat();
+//  double omega = 2.0*M_PI*param.source.frequency; // angular frequency
+//  D *= 0.5*param.dt*omega;
+//  cout << "done. Time = " << chrono.RealTime() << " sec" << endl;
+//  chrono.Clear();
+
+  //SparseMatrix SysFine(M_fine);
+  //SysFine = 0.0;
+  //SysFine += D;
+  //SysFine += M_fine;
+  //GSSmoother PrecFine(SysFine);
+
+  out << "Fine scale RHS vector... " << flush;
+  chrono.Clear();
+  ParLinearForm b_fine(&fespace);
+  ConstantCoefficient zero(0.0); // homogeneous Dirichlet bc
+  if (param.source.plane_wave)
+  {
+    PlaneWaveSource plane_wave_source(param, one_over_K_coef);
+    b_fine.AddDomainIntegrator(new DomainLFIntegrator(plane_wave_source));
+    b_fine.AddBdrFaceIntegrator(
+          new DGDirichletLFIntegrator(zero, one_over_rho_coef,
+                                      param.method.dg_sigma,
+                                      param.method.dg_kappa));
+    b_fine.Assemble();
+  }
+  else
+  {
+    ScalarPointForce scalar_point_force(param, one_over_K_coef);
+    b_fine.AddDomainIntegrator(new DomainLFIntegrator(scalar_point_force));
+    b_fine.AddBdrFaceIntegrator(
+          new DGDirichletLFIntegrator(zero, one_over_rho_coef,
+                                      param.method.dg_sigma,
+                                      param.method.dg_kappa));
+    b_fine.Assemble();
+  }
+  HypreParVector *B_fine = b_fine.ParallelAssemble();
+  const double b_fine_norm = GlobalLpNorm(2, B_fine->Norml2(), MPI_COMM_WORLD);
+  out << "||b_h||_L2 = " << b_fine_norm << endl;
+  out << "done. Time = " << chrono.RealTime() << " sec" << endl;
+
+
+  vector<int> my_cells_dofs;
+  my_cells_dofs.reserve(fespace.GetNE() * 6);
+  for (int el = 0; el < fespace.GetNE(); ++el)
+  {
+    const int cellID = fespace.GetAttribute(el) - 1;
+    Array<int> vdofs;
+    fespace.GetElementVDofs(el, vdofs);
+    my_cells_dofs.push_back(-cellID);
+    my_cells_dofs.push_back(vdofs.Size());
+    for (int d = 0; d < vdofs.Size(); ++d) {
+      const int globTDof = fespace.GetGlobalTDofNumber(vdofs[d]);
+      my_cells_dofs.push_back(globTDof);
+    }
+  }
+
+  out << "my_cells_dofs:\n";
+  for (size_t i = 0; i < my_cells_dofs.size(); ++i) {
+    if (my_cells_dofs[i] < 0)
+      out << endl;
+    out << my_cells_dofs[i] << " ";
+  }
+
+  if (myid == 0)
+  {
+    MPI_Status status;
+    for (int rank = 1; rank < nproc; ++rank)
+    {
+      int ncells_dofs;
+      MPI_Recv(&ncells_dofs, 1, MPI_INT, rank, 101, MPI_COMM_WORLD, &status);
+      vector<int> cells_dofs(ncells_dofs);
+      MPI_Recv(&cells_dofs[0], ncells_dofs, MPI_INT, rank, 102, MPI_COMM_WORLD, &status);
+      my_cells_dofs.reserve(my_cells_dofs.size() + ncells_dofs);
+//      my_cells_dofs.insert(my_cells_dofs.end(), cells_dofs.begin(), cells_dofs.end());
+      for (int i = 0; i < ncells_dofs; ++i)
+        my_cells_dofs.push_back(cells_dofs[i]);
+    }
+  }
+  else
+  {
+    const int my_ncells_dofs = my_cells_dofs.size();
+    MPI_Send(&my_ncells_dofs, 1, MPI_INT, 0, 101, MPI_COMM_WORLD);
+    MPI_Send(&my_cells_dofs[0], my_ncells_dofs, MPI_INT, 0, 102, MPI_COMM_WORLD);
+  }
+
+  int nglob_cells_dofs = my_cells_dofs.size();
+  MPI_Bcast(&nglob_cells_dofs, 1, MPI_INT, 0, MPI_COMM_WORLD);
+  if (myid != 0)
+    my_cells_dofs.resize(nglob_cells_dofs);
+  MPI_Bcast(&my_cells_dofs[0], nglob_cells_dofs, MPI_INT, 0, MPI_COMM_WORLD);
+
+  const int globNE = param.mesh->GetNE();
+  out << "globNE " << globNE << endl;
+  vector<vector<int> > map_cell_dofs(globNE);
+  for (int el = 0, k = 0; el < globNE; ++el)
+  {
+    MFEM_VERIFY(k < (int)my_cells_dofs.size(), "k is out of range");
+    int cellID = my_cells_dofs[k++];
+    MFEM_VERIFY(cellID <= 0, "Incorrect cellID");
+    cellID = -cellID;
+    const int ndofs = my_cells_dofs[k++];
+    if (!(cellID >= 0 && cellID < globNE))
+      out << "el " << el << " cellID " << cellID << endl;
+    MFEM_VERIFY(cellID >= 0 && cellID < globNE, "cellID is out of range");
+    MFEM_VERIFY(map_cell_dofs[cellID].empty(), "This cellID has been already added");
+    map_cell_dofs[cellID].resize(ndofs);
+    for (int i = 0; i < ndofs; ++i)
+      map_cell_dofs[cellID][i] = my_cells_dofs[k++];
+  }
+
+  out << "map_cell_dofs:\n";
+  for (size_t i = 0; i < map_cell_dofs.size(); ++i) {
+    out << i << " ";
+    for (size_t j = 0; j < map_cell_dofs[i].size(); ++j)
+      out << map_cell_dofs[i][j] << " ";
+    out << endl;
+  }
+
+
+  std::vector<int> n_fine_cell_per_coarse_x(param.method.gms_Nx);
+  fill_up_n_fine_cells_per_coarse(param.grid.nx, param.method.gms_Nx,
+                                  n_fine_cell_per_coarse_x);
+
+  std::vector<int> n_fine_cell_per_coarse_y(param.method.gms_Ny);
+  fill_up_n_fine_cells_per_coarse(param.grid.ny, param.method.gms_Ny,
+                                  n_fine_cell_per_coarse_y);
+
+  const double hx = param.grid.get_hx();
+  const double hy = param.grid.get_hy();
+
+  const int gen_edges = 1;
+
+  std::vector<std::vector<int> > local2global;
+  std::vector<DenseMatrix> R;
+
+  if (param.dimension == 2)
+  {
+    const int n_coarse_cells = param.method.gms_Nx * param.method.gms_Ny;
+
+    // number of coarse cells that all processes will have (at least)
+    const int min_n_cells = n_coarse_cells / nproc;
+    // number of coarse cells that should be distributed among some processes
+    const int extra_cells = n_coarse_cells % nproc;
+    // first and last (not including) indices of coarse element for the current
+    // 'myid' process
+    const int my_start_cell = min_n_cells * myid + (extra_cells < myid ? extra_cells : myid);
+    const int my_end_cell   = my_start_cell + min_n_cells + (extra_cells > myid);
+
+    out << "coarse cells: start " << my_start_cell << " end " << my_end_cell << endl;
+
+    local2global.resize(my_end_cell - my_start_cell);
+    R.resize(my_end_cell - my_start_cell);
+
+    int offset_x, offset_y = 0;
+
+    for (int iy = 0; iy < param.method.gms_Ny; ++iy)
+    {
+      const int n_fine_y = n_fine_cell_per_coarse_y[iy];
+      const double SY = n_fine_y * hy;
+
+      offset_x = 0;
+      for (int ix = 0; ix < param.method.gms_Nx; ++ix)
+      {
+        const int global_coarse_cell = iy*param.method.gms_Nx + ix;
+        if (global_coarse_cell < my_start_cell || global_coarse_cell >= my_end_cell)
+          continue;
+        const int my_coarse_cell = global_coarse_cell - my_start_cell;
+        out << "\nglobal_coarse_cell " << global_coarse_cell
+            << " my_coarse_cell " << my_coarse_cell << endl;
+
+        const int n_fine_x = n_fine_cell_per_coarse_x[ix];
+        const double SX = n_fine_x * hx;
+        Mesh *ccell_fine_mesh =
+            new Mesh(n_fine_x, n_fine_y, Element::QUADRILATERAL, gen_edges, SX, SY);
+
+        double *local_one_over_rho = new double[n_fine_x * n_fine_y];
+        double *local_one_over_K   = new double[n_fine_x * n_fine_y];
+        for (int fiy = 0; fiy < n_fine_y; ++fiy)
+        {
+          for (int fix = 0; fix < n_fine_x; ++fix)
+          {
+            const int loc_cell = fiy*n_fine_x + fix;
+            const int glob_cell = (offset_y + fiy) * param.grid.nx +
+                                  (offset_x + fix);
+
+            local_one_over_rho[loc_cell] = one_over_rho[glob_cell];
+            local_one_over_K[loc_cell]   = one_over_K[glob_cell];
+          }
+        }
+        const bool own_array = true;
+        CWConstCoefficient local_one_over_rho_coef(local_one_over_rho, own_array);
+        CWConstCoefficient local_one_over_K_coef(local_one_over_K, own_array);
+
+#ifdef BASIS_DG
+        compute_basis_DG(ccell_fine_mesh, param.method.gms_nb, param.method.gms_ni,
+                         local_one_over_rho_coef, local_one_over_K_coef,
+                         R[my_coarse_cell]);
+#else
+        compute_basis_CG(ccell_fine_mesh, param.method.gms_nb, param.method.gms_ni,
+                         local_one_over_rho_coef, local_one_over_K_coef,
+                         R[my_coarse_cell]);
+#endif
+
+        // initialize with all -1 to check that all values are defined later
+        local2global[my_coarse_cell].resize(R[my_coarse_cell].Height(), -1);
+        DG_FECollection DG_fec(param.method.order, param.dimension);
+        FiniteElementSpace DG_fespace(ccell_fine_mesh, &DG_fec);
+        Array<int> loc_dofs;
+        for (int fiy = 0; fiy < n_fine_y; ++fiy)
+        {
+          for (int fix = 0; fix < n_fine_x; ++fix)
+          {
+            const int loc_cell = fiy*n_fine_x + fix;
+            const int glob_cell = (offset_y + fiy) * param.grid.nx +
+                                  (offset_x + fix);
+            MFEM_VERIFY(glob_cell >= 0 && glob_cell < (int)map_cell_dofs.size(),
+                        "glob_cell is out of range");
+
+            DG_fespace.GetElementVDofs(loc_cell, loc_dofs);
+            const vector<int> &glob_dofs = map_cell_dofs[glob_cell];
+            MFEM_VERIFY(loc_dofs.Size() == (int)glob_dofs.size(), "Dimensions mismatch");
+
+            for (int di = 0; di < loc_dofs.Size(); ++di)
+              local2global[my_coarse_cell][loc_dofs[di]] = glob_dofs[di];
+          }
+        }
+
+        // check that all values were defined
+        for (size_t ii = 0; ii < local2global[my_coarse_cell].size(); ++ii) {
+          MFEM_VERIFY(local2global[my_coarse_cell][ii] >= 0, "Some values of local2global "
+                      "vector were not defined");
+        }
+
+        delete ccell_fine_mesh;
+
+        offset_x += n_fine_x;
+      }
+      offset_y += n_fine_y;
+    }
+  }
+  else // 3D
+  {
+    /*
+    std::vector<int> n_fine_cell_per_coarse_z(param.method.gms_Nz);
+    fill_up_n_fine_cells_per_coarse(param.grid.nz, param.method.gms_Nz,
+                                    n_fine_cell_per_coarse_z);
+
+    const double hz = param.grid.get_hz();
+
+    const int n_coarse_cells = param.method.gms_Nx * param.method.gms_Ny * param.method.gms_Nz;
+    local2global.resize(n_coarse_cells);
+    R.resize(n_coarse_cells);
+
+    int offset_x = 0, offset_y = 0, offset_z = 0;
+
+    for (int iz = 0; iz < param.method.gms_Nz; ++iz)
+    {
+      const int n_fine_z = n_fine_cell_per_coarse_z[iz];
+      const double SZ = n_fine_z * hz;
+      for (int iy = 0; iy < param.method.gms_Ny; ++iy)
+      {
+        const int n_fine_y = n_fine_cell_per_coarse_y[iy];
+        const double SY = n_fine_y * hy;
+        for (int ix = 0; ix < param.method.gms_Nx; ++ix)
+        {
+          const int n_fine_x = n_fine_cell_per_coarse_x[ix];
+          const double SX = n_fine_x * hx;
+          Mesh *ccell_fine_mesh =
+              new Mesh(n_fine_cell_per_coarse_x[ix],
+                       n_fine_cell_per_coarse_y[iy],
+                       n_fine_cell_per_coarse_z[iz],
+                       Element::HEXAHEDRON, gen_edges, SX, SY, SZ);
+
+          double *local_one_over_rho = new double[n_fine_x * n_fine_y * n_fine_z];
+          double *local_one_over_K   = new double[n_fine_x * n_fine_y * n_fine_z];
+          for (int fiz = 0; fiz < n_fine_z; ++fiz)
+          {
+            for (int fiy = 0; fiy < n_fine_y; ++fiy)
+            {
+              for (int fix = 0; fix < n_fine_x; ++fix)
+              {
+                const int loc_cell = fiz*n_fine_x*n_fine_y + fiy*n_fine_x + fix;
+                const int glob_cell = (offset_z + fiz) * param.grid.nx * param.grid.ny +
+                                      (offset_y + fiy) * param.grid.nx +
+                                      (offset_x + fix);
+
+                local_one_over_rho[loc_cell] = one_over_rho[glob_cell];
+                local_one_over_K[loc_cell]   = one_over_K[glob_cell];
+              }
+            }
+          }
+          const bool own_array = true;
+          CWConstCoefficient local_one_over_rho_coef(local_one_over_rho, own_array);
+          CWConstCoefficient local_one_over_K_coef(local_one_over_K, own_array);
+
+#ifdef BASIS_DG
+          compute_basis_DG(ccell_fine_mesh, param.method.gms_nb, param.method.gms_ni,
+                           local_one_over_rho_coef, local_one_over_K_coef,
+                           R[iz*param.method.gms_Nx*param.method.gms_Ny +
+                             iy*param.method.gms_Nx + ix]);
+#else
+          compute_basis_CG(ccell_fine_mesh, param.method.gms_nb, param.method.gms_ni,
+                           local_one_over_rho_coef, local_one_over_K_coef,
+                           R[iz*param.method.gms_Nx*param.method.gms_Ny +
+                             iy*param.method.gms_Nx + ix]);
+#endif
+          delete ccell_fine_mesh;
+
+          offset_x += n_fine_x;
+        }
+        offset_y += n_fine_y;
+      }
+      offset_z += n_fine_z;
+    }
+    */
+  }
+
+  // global sparse R matrix
+  int my_nrows = 0;
+  int my_ncols = 0;
+  int my_nnonzero = 0;
+  for (size_t i = 0; i < R.size(); ++i)
+  {
+    const int h = R[i].Height();
+    const int w = R[i].Width();
+    my_nrows += w; // transpose
+    my_ncols += h; // transpose
+    my_nnonzero += h * w;
+  }
+
+  int glob_nrows = 0;
+  int glob_ncols = 0;
+
+  MPI_Allreduce(&my_nrows, &glob_nrows, 1, MPI_INT, MPI_SUM, MPI_COMM_WORLD);
+  MPI_Allreduce(&my_ncols, &glob_ncols, 1, MPI_INT, MPI_SUM, MPI_COMM_WORLD);
+
+  out << "\nmy_nrows " << my_nrows << " my_ncols " << my_ncols << endl;
+  out << "glob_nrows " << glob_nrows << " glob_ncols " << glob_ncols << endl;
+
+  int *Rrows = new int[nproc + 1];
+  if (myid == 0)
+  {
+    Rrows[0] = 0;
+    Rrows[1] = my_nrows;
+    MPI_Status status;
+    for (int rank = 1; rank < nproc; ++rank)
+    {
+      int nrows;
+      MPI_Recv(&nrows, 1, MPI_INT, rank, 103, MPI_COMM_WORLD, &status);
+      Rrows[rank + 1] = Rrows[rank] + nrows;
+    }
+  }
+  else
+  {
+    MPI_Send(&my_nrows, 1, MPI_INT, 0, 103, MPI_COMM_WORLD);
+  }
+  MPI_Bcast(Rrows, nproc + 1, MPI_INT, 0, MPI_COMM_WORLD);
+
+  out << "\nRrows: ";
+  for (int i = 0; i < nproc + 1; ++i)
+    out << Rrows[i] << " ";
+  out << endl;
+
+  const int my_start_row = Rrows[myid];
+  const int my_end_row   = Rrows[myid + 1];
+  MFEM_VERIFY(my_nrows == my_end_row - my_start_row, "Number of rows mismatch");
+
+  const int *S_row_starts = S_fine->RowPart();
+  const int *S_col_starts = S_fine->ColPart();
+  const int *M_row_starts = M_fine->RowPart();
+  const int *M_col_starts = M_fine->ColPart();
+  out << "S_row_starts: " << S_row_starts[0] << " " << S_row_starts[1] << endl;
+  out << "S_col_starts: " << S_col_starts[0] << " " << S_col_starts[1] << endl;
+  out << "M_row_starts: " << M_row_starts[0] << " " << M_row_starts[1] << endl;
+  out << "M_col_starts: " << M_col_starts[0] << " " << M_col_starts[1] << endl;
+
+  int *Ri = new int[my_nrows + 1];
+  int *Rj = new int[my_nnonzero];
+  double *Rdata = new double[my_nnonzero];
+
+  Ri[0] = 0;
+  int k = 0;
+  int p = 0;
+  for (size_t r = 0; r < R.size(); ++r)
+  {
+    const int h = R[r].Height();
+    const int w = R[r].Width();
+    for (int i = 0; i < w; ++i)
+    {
+      Ri[k+1] = Ri[k] + h;
+      ++k;
+
+      for (int j = 0; j < h; ++j)
+      {
+        Rj[p] = local2global[r][j];
+        Rdata[p] = R[r](j, i);
+        ++p;
+      }
+    }
+  }
+
+  int myRrows[] = { my_start_row, my_end_row };
+
+  /** Creates a general parallel matrix from a local CSR matrix on each
+      processor described by the I, J and data arrays. The local matrix should
+      be of size (local) nrows by (global) glob_ncols. The new parallel matrix
+      contains copies of all input arrays (so they can be deleted). */
+  HypreParMatrix R_global(MPI_COMM_WORLD, my_nrows, glob_nrows, glob_ncols,
+                          Ri, Rj, Rdata, myRrows, S_fine->RowPart());
+
+  HypreParMatrix *R_global_T = R_global.Transpose();
+
+  delete[] Rrows;
+  delete[] Rdata;
+  delete[] Rj;
+  delete[] Ri;
+
+  HypreParMatrix *M_coarse = RAP(M_fine, R_global_T);
+  HypreParMatrix *S_coarse = RAP(S_fine, R_global_T);
+
+  delete S_coarse;
+  delete M_coarse;
+  delete R_global_T;
+
+  delete B_fine;
+  delete M_fine;
+  delete S_fine;
 }
 #endif // MFEM_USE_MPI
 
