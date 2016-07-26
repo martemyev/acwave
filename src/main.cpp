@@ -47,7 +47,8 @@ int main(int argc, char *argv[])
     AcousticWave acwave(param);
     acwave.run();
 
-    cout << "\nTOTAL TIME " << chrono.RealTime() << " sec\n" << endl;
+    if (myid == 0)
+      cout << "\nTOTAL TIME " << chrono.RealTime() << " sec\n" << endl;
   }
   catch (int ierr)
   {

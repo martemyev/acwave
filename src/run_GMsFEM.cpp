@@ -14,11 +14,11 @@ using namespace mfem;
 #ifdef MFEM_USE_MPI
 void AcousticWave::run_GMsFEM() const
 {
-  int size;
-  MPI_Comm_size(MPI_COMM_WORLD, &size);
-  if (size == 1)
-    run_GMsFEM_serial();
-  else
+//  int size;
+//  MPI_Comm_size(MPI_COMM_WORLD, &size);
+//  if (size == 1)
+//    run_GMsFEM_serial();
+//  else
     run_GMsFEM_parallel();
 }
 #endif // MFEM_USE_MPI
@@ -614,6 +614,53 @@ void AcousticWave::run_GMsFEM_serial() const
 
 
 #ifdef MFEM_USE_MPI
+static void par_time_step(HypreParMatrix &M, HypreParMatrix &S,
+                          const Vector &b, double timeval, double dt,
+                          Vector &U_0, Vector &U_1, Vector &U_2)
+{
+  HypreSmoother M_prec;
+  CGSolver M_solver(M.GetComm());
+
+  M_prec.SetType(HypreSmoother::Jacobi);
+  M_solver.SetPreconditioner(M_prec);
+  M_solver.SetOperator(M);
+
+  M_solver.iterative_mode = false;
+  M_solver.SetRelTol(1e-12);
+  M_solver.SetAbsTol(0.0);
+  M_solver.SetMaxIter(200);
+  M_solver.SetPrintLevel(0);
+
+  Vector y = U_1; y *= 2.0; y -= U_2;        // y = 2*u_1 - u_2
+
+  Vector z0 = U_0;         // z0 = M * (2*u_1 - u_2)
+  M.Mult(y, z0);
+
+  Vector z1 = U_0;         // z1 = S * u_1
+  S.Mult(U_1, z1);
+
+  Vector z2 = b; z2 *= timeval; // z2 = timeval*source
+
+  // y = dt^2 * (S*u_1 - timeval*source), where it can be
+  // y = dt^2 * (S*u_1 - ricker*pointforce) OR
+  // y = dt^2 * (S*u_1 - gaussfirstderivative*momenttensor)
+  y = z1; y -= z2; y *= dt*dt;
+
+  // RHS = M*(2*u_1-u_2) - dt^2*(S*u_1-timeval*source)
+  Vector RHS = z0; RHS -= y;
+
+//    for (int i = 0; i < N; ++i) y[i] = diagD[i] * u_2[i]; // y = D * u_2
+
+  // RHS = M*(2*u_1-u_2) - dt^2*(S*u_1-timeval*source) + D*u_2
+//    RHS += y;
+
+  // (M+D)*x_0 = M*(2*x_1-x_2) - dt^2*(S*x_1-r*b) + D*x_2
+  M_solver.Mult(RHS, U_0);
+
+  U_2 = U_1;
+  U_1 = U_0;
+}
+
 void AcousticWave::run_GMsFEM_parallel() const
 {
   MFEM_VERIFY(param.mesh, "The serial mesh is not initialized");
@@ -1130,6 +1177,109 @@ void AcousticWave::run_GMsFEM_parallel() const
 
   HypreParMatrix *M_coarse = RAP(M_fine, R_global_T);
   HypreParMatrix *S_coarse = RAP(S_fine, R_global_T);
+  HypreParVector b_coarse(*M_coarse);
+  R_global.Mult(*B_fine, b_coarse);
+
+  const string method_name = "parGMsFEM_";
+
+  HypreParVector U_0(*M_coarse); U_0 = 0.0;
+  HypreParVector U_1(*M_coarse); U_1 = 0.0;
+  HypreParVector U_2(*M_coarse); U_2 = 0.0;
+  ParGridFunction u_0(&fespace);
+
+  const int n_time_steps = param.T / param.dt + 0.5; // nearest integer
+  const int tenth = 0.1 * n_time_steps;
+
+  if (myid == 0)
+    cout << "N time steps = " << n_time_steps
+         << "\nTime loop..." << endl;
+
+  // the values of the time-dependent part of the source
+  vector<double> time_values(n_time_steps);
+  for (int time_step = 1; time_step <= n_time_steps; ++time_step)
+  {
+    const double cur_time = time_step * param.dt;
+    time_values[time_step-1] = RickerWavelet(param.source,
+                                             cur_time - param.dt);
+  }
+
+  const string name = method_name + param.output.extra_string;
+  const string pref_path = string(param.output.directory) + "/" + SNAPSHOTS_DIR;
+  VisItDataCollection visit_dc(name.c_str(), param.par_mesh);
+  visit_dc.SetPrefixPath(pref_path.c_str());
+  visit_dc.RegisterField("coarse_pressure", &u_0);
+  {
+    visit_dc.SetCycle(0);
+    visit_dc.SetTime(0.0);
+    HypreParVector u_tmp(&fespace);
+    R_global_T->Mult(U_0, u_tmp);
+    u_0 = u_tmp;
+    visit_dc.Save();
+  }
+
+  StopWatch time_loop_timer;
+  time_loop_timer.Start();
+  double time_of_snapshots = 0.;
+  double time_of_seismograms = 0.;
+  for (int t_step = 1; t_step <= n_time_steps; ++t_step)
+  {
+    {
+      par_time_step(*M_coarse, *S_coarse, b_coarse, time_values[t_step-1],
+                    param.dt, U_0, U_1, U_2); //, out);
+    }
+
+    // Compute and print the L^2 norm of the error
+    double glob_norm = GlobalLpNorm(2, U_0.Norml2(), MPI_COMM_WORLD);
+    if (t_step % tenth == 0) {
+      out << "step " << t_step << " / " << n_time_steps
+           << " ||U||_{L^2} = " << glob_norm << endl;
+    }
+
+    {
+      StopWatch timer;
+      timer.Start();
+      HypreParVector u_tmp(&fespace);
+      R_global_T->Mult(U_0, u_tmp);
+      //{ double norm = GlobalLpNorm(2, u_tmp.Norml2(), MPI_COMM_WORLD); out << "||utmp_H|| = " << norm << endl; }
+      if (t_step % param.step_snap == 0) {
+        visit_dc.SetCycle(t_step);
+        visit_dc.SetTime(t_step*param.dt);
+        u_0 = u_tmp;
+        visit_dc.Save();
+      }
+      timer.Stop();
+      time_of_snapshots += timer.UserTime();
+    }
+
+//    if (t_step % param.step_snap == 0)
+//    {
+//      ostringstream mesh_name, sol_name;
+//      mesh_name << param.output.directory << "/" << param.output.extra_string << "_mesh." << setfill('0') << setw(6) << myid;
+//      sol_name << param.output.directory << "/" << param.output.extra_string << "_sol_t" << t_step << "." << setfill('0') << setw(6) << myid;
+
+//      ofstream mesh_ofs(mesh_name.str().c_str());
+//      mesh_ofs.precision(8);
+//      param.par_mesh->Print(mesh_ofs);
+
+//      ofstream sol_ofs(sol_name.str().c_str());
+//      sol_ofs.precision(8);
+//      HypreParVector u_tmp(&fespace);
+//      R_global_T->Mult(U_0, u_tmp);
+//      ParGridFunction x(&fespace, &u_tmp);
+//      x.Save(sol_ofs);
+//    }
+
+//    if (t_step % param.step_seis == 0) {
+//      StopWatch timer;
+//      timer.Start();
+//      R_global_T.Mult(U_0, u_0);
+//      output_seismograms(param, *param.mesh, u_0, seisU);
+//      timer.Stop();
+//      time_of_seismograms += timer.UserTime();
+//    }
+  }
+
+  time_loop_timer.Stop();
 
   delete S_coarse;
   delete M_coarse;
