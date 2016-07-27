@@ -838,7 +838,7 @@ void AcousticWave::run_GMsFEM_parallel() const
   }
   else
   {
-    const int my_ncells_dofs = my_cells_dofs.size();
+    int my_ncells_dofs = my_cells_dofs.size();
     MPI_Send(&my_ncells_dofs, 1, MPI_INT, 0, 101, MPI_COMM_WORLD);
     MPI_Send(&my_cells_dofs[0], my_ncells_dofs, MPI_INT, 0, 102, MPI_COMM_WORLD);
   }
