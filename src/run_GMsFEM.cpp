@@ -438,7 +438,8 @@ void AcousticWave::run_GMsFEM_serial() const
       chrono.Clear();
       cout << "Output R local matrices..." << flush;
       for (size_t r = 0; r < R.size(); ++r) {
-        const string fname = string(param.output.directory) + "/r" + d2s(r) + "_local_mat.dat";
+        const string fname = string(param.output.directory) + "/r" + d2s(r) +
+                             "_local_ser" + param.output.extra_string + ".dat";
         ofstream mout(fname.c_str());
         MFEM_VERIFY(mout, "Cannot open file " + fname);
         R[r].PrintMatlab(mout);
@@ -448,7 +449,8 @@ void AcousticWave::run_GMsFEM_serial() const
     {
       chrono.Clear();
       cout << "Output R_global matrix..." << flush;
-      const string fname = string(param.output.directory) + "/r_global_mat.dat";
+      const string fname = string(param.output.directory) + "/r_global_ser"
+                           + param.output.extra_string + ".dat";
       ofstream mout(fname.c_str());
       MFEM_VERIFY(mout, "Cannot open file " + fname);
       R_global.PrintMatlab(mout);
@@ -457,7 +459,8 @@ void AcousticWave::run_GMsFEM_serial() const
     {
       chrono.Clear();
       cout << "Output R_global_T matrix..." << flush;
-      const string fname = string(param.output.directory) + "/r_global_mat_t.dat";
+      const string fname = string(param.output.directory) + "/r_global_t_ser" +
+                           param.output.extra_string + ".dat";
       ofstream mout(fname.c_str());
       MFEM_VERIFY(mout, "Cannot open file " + fname);
       R_global_T->PrintMatlab(mout);
@@ -466,7 +469,8 @@ void AcousticWave::run_GMsFEM_serial() const
     {
       chrono.Clear();
       cout << "Output M_fine matrix..." << flush;
-      const string fname = string(param.output.directory) + "/m_fine_mat.dat";
+      const string fname = string(param.output.directory) + "/m_fine_ser" +
+                           param.output.extra_string + ".dat";
       ofstream mout(fname.c_str());
       MFEM_VERIFY(mout, "Cannot open file " + fname);
       M_fine.PrintMatlab(mout);
@@ -475,7 +479,8 @@ void AcousticWave::run_GMsFEM_serial() const
     {
       chrono.Clear();
       cout << "Output S_fine matrix..." << flush;
-      const string fname = string(param.output.directory) + "/s_fine_mat.dat";
+      const string fname = string(param.output.directory) + "/s_fine_ser" +
+                           param.output.extra_string + ".dat";
       ofstream mout(fname.c_str());
       MFEM_VERIFY(mout, "Cannot open file " + fname);
       S_fine.PrintMatlab(mout);
@@ -484,7 +489,8 @@ void AcousticWave::run_GMsFEM_serial() const
     {
       chrono.Clear();
       cout << "Output M_coarse matrix..." << flush;
-      const string fname = string(param.output.directory) + "/m_coarse_mat.dat";
+      const string fname = string(param.output.directory) + "/m_coarse_ser" +
+                           param.output.extra_string + ".dat";
       ofstream mout(fname.c_str());
       MFEM_VERIFY(mout, "Cannot open file " + fname);
       M_coarse->PrintMatlab(mout);
@@ -493,7 +499,8 @@ void AcousticWave::run_GMsFEM_serial() const
     {
       chrono.Clear();
       cout << "Output S_coarse matrix..." << flush;
-      const string fname = string(param.output.directory) + "/s_coarse_mat.dat";
+      const string fname = string(param.output.directory) + "/s_coarse_ser" +
+                           param.output.extra_string + ".dat";
       ofstream mout(fname.c_str());
       MFEM_VERIFY(mout, "Cannot open file " + fname);
       S_coarse->PrintMatlab(mout);
@@ -661,6 +668,32 @@ static void par_time_step(HypreParMatrix &M, HypreParMatrix &S,
   U_1 = U_0;
 }
 
+static void print_par_matrix_matlab(HypreParMatrix &A, const string &filename)
+{
+  int myid;
+  MPI_Comm_rank(MPI_COMM_WORLD, &myid);
+
+  // This call works because HypreParMatrix implicitly converts to hypre_ParCSRMatrix*
+  hypre_CSRMatrix* A_serial = hypre_ParCSRMatrixToCSRMatrixAll(A);
+
+  // This "views" the hypre_CSRMatrix as an mfem::SparseMatrix
+  mfem::SparseMatrix A_sparse(
+        hypre_CSRMatrixI(A_serial), hypre_CSRMatrixJ(A_serial), hypre_CSRMatrixData(A_serial),
+        hypre_CSRMatrixNumRows(A_serial), hypre_CSRMatrixNumCols(A_serial),
+        false, false, true);
+
+  // Write to file from root process
+  if (myid == 0)
+  {
+    ofstream out(filename.c_str());
+    MFEM_VERIFY(out, "Cannot open file " << filename);
+    A_sparse.PrintMatlab(out);
+  }
+
+  // Cleanup, since the hypre call creates a new matrix on each process
+  hypre_CSRMatrixDestroy(A_serial);
+}
+
 void AcousticWave::run_GMsFEM_parallel() const
 {
   MFEM_VERIFY(param.mesh, "The serial mesh is not initialized");
@@ -684,6 +717,7 @@ void AcousticWave::run_GMsFEM_parallel() const
   chrono.Clear();
   DG_FECollection fec(param.method.order, dim);
   ParFiniteElementSpace fespace(param.par_mesh, &fec);
+  FiniteElementSpace fespace_serial(param.mesh, &fec);
   out << "done. Time = " << chrono.RealTime() << " sec" << endl;
 
   const int n_dofs = fespace.GlobalTrueVSize();
@@ -799,6 +833,18 @@ void AcousticWave::run_GMsFEM_parallel() const
   out << "done. Time = " << chrono.RealTime() << " sec" << endl;
 
 
+  out << "serial fespace:\n";
+  for (int el = 0; el < fespace_serial.GetNE(); ++el)
+  {
+    Array<int> vdofs;
+    fespace_serial.GetElementVDofs(el, vdofs);
+    out << el << " ";
+    for (int i = 0; i < vdofs.Size(); ++i)
+      out << vdofs[i] << " ";
+    out << endl;
+  }
+
+
   vector<int> my_cells_dofs;
   my_cells_dofs.reserve(fespace.GetNE() * 6);
   for (int el = 0; el < fespace.GetNE(); ++el)
@@ -911,6 +957,8 @@ void AcousticWave::run_GMsFEM_parallel() const
     local2global.resize(my_end_cell - my_start_cell);
     R.resize(my_end_cell - my_start_cell);
 
+    std::vector<std::vector<int> > local2global_serial(my_end_cell - my_start_cell);
+
     int offset_x, offset_y = 0;
 
     for (int iy = 0; iy < param.method.gms_Ny; ++iy)
@@ -921,15 +969,19 @@ void AcousticWave::run_GMsFEM_parallel() const
       offset_x = 0;
       for (int ix = 0; ix < param.method.gms_Nx; ++ix)
       {
+        const int n_fine_x = n_fine_cell_per_coarse_x[ix];
+        const double SX = n_fine_x * hx;
+
         const int global_coarse_cell = iy*param.method.gms_Nx + ix;
         if (global_coarse_cell < my_start_cell || global_coarse_cell >= my_end_cell)
+        {
+          offset_x += n_fine_x;
           continue;
+        }
         const int my_coarse_cell = global_coarse_cell - my_start_cell;
         out << "\nglobal_coarse_cell " << global_coarse_cell
             << " my_coarse_cell " << my_coarse_cell << endl;
 
-        const int n_fine_x = n_fine_cell_per_coarse_x[ix];
-        const double SX = n_fine_x * hx;
         Mesh *ccell_fine_mesh =
             new Mesh(n_fine_x, n_fine_y, Element::QUADRILATERAL, gen_edges, SX, SY);
 
@@ -963,6 +1015,7 @@ void AcousticWave::run_GMsFEM_parallel() const
 
         // initialize with all -1 to check that all values are defined later
         local2global[my_coarse_cell].resize(R[my_coarse_cell].Height(), -1);
+        local2global_serial[my_coarse_cell].resize(R[my_coarse_cell].Height(), -1);
         DG_FECollection DG_fec(param.method.order, param.dimension);
         FiniteElementSpace DG_fespace(ccell_fine_mesh, &DG_fec);
         Array<int> loc_dofs;
@@ -980,8 +1033,15 @@ void AcousticWave::run_GMsFEM_parallel() const
             const vector<int> &glob_dofs = map_cell_dofs[glob_cell];
             MFEM_VERIFY(loc_dofs.Size() == (int)glob_dofs.size(), "Dimensions mismatch");
 
+            Array<int> glob_dofs_serial;
+            fespace_serial.GetElementVDofs(glob_cell, glob_dofs_serial);
+            MFEM_VERIFY(loc_dofs.Size() == glob_dofs_serial.Size(), "Dimensions mismatch");
+
             for (int di = 0; di < loc_dofs.Size(); ++di)
               local2global[my_coarse_cell][loc_dofs[di]] = glob_dofs[di];
+
+            for (int di = 0; di < loc_dofs.Size(); ++di)
+              local2global_serial[my_coarse_cell][loc_dofs[di]] = glob_dofs_serial[di];
           }
         }
 
@@ -989,6 +1049,17 @@ void AcousticWave::run_GMsFEM_parallel() const
         for (size_t ii = 0; ii < local2global[my_coarse_cell].size(); ++ii) {
           MFEM_VERIFY(local2global[my_coarse_cell][ii] >= 0, "Some values of local2global "
                       "vector were not defined");
+        }
+        for (size_t ii = 0; ii < local2global_serial[my_coarse_cell].size(); ++ii) {
+          MFEM_VERIFY(local2global_serial[my_coarse_cell][ii] >= 0, "Some values of local2global_serial "
+                      "vector were not defined");
+        }
+
+        for (size_t ii = 0; ii < local2global[my_coarse_cell].size(); ++ii) {
+          out << ii << " " << local2global[my_coarse_cell][ii] << " "
+              << local2global_serial[my_coarse_cell][ii] << endl;
+          //MFEM_VERIFY(local2global[my_coarse_cell][ii] == local2global_serial[my_coarse_cell][ii],
+          //            "local2global matrices mismatch");
         }
 
         delete ccell_fine_mesh;
@@ -1180,6 +1251,70 @@ void AcousticWave::run_GMsFEM_parallel() const
   HypreParVector b_coarse(*M_coarse);
   R_global.Mult(*B_fine, b_coarse);
 
+  if (param.output.print_matrices)
+  {
+    {
+      chrono.Clear();
+      cout << "Output R local matrices..." << flush;
+      for (size_t r = 0; r < R.size(); ++r) {
+        const string fname = string(param.output.directory) + "/r" + d2s(r) +
+                             "_local_par" + param.output.extra_string + ".dat";
+        ofstream mout(fname.c_str());
+        MFEM_VERIFY(mout, "Cannot open file " + fname);
+        R[r].PrintMatlab(mout);
+      }
+      cout << "done. Time = " << chrono.RealTime() << " sec" << endl;
+    }
+    {
+      chrono.Clear();
+      cout << "Output R_global matrix..." << flush;
+      const string fname = string(param.output.directory) + "/r_global_par" +
+                           param.output.extra_string + ".dat";
+      print_par_matrix_matlab(R_global, fname);
+      cout << "done. Time = " << chrono.RealTime() << " sec" << endl;
+    }
+    {
+      chrono.Clear();
+      cout << "Output R_global_T matrix..." << flush;
+      const string fname = string(param.output.directory) + "/r_global_t_par" +
+                           param.output.extra_string + ".dat";
+      print_par_matrix_matlab(*R_global_T, fname);
+      cout << "done. Time = " << chrono.RealTime() << " sec" << endl;
+    }
+    {
+      chrono.Clear();
+      cout << "Output M_fine matrix..." << flush;
+      const string fname = string(param.output.directory) + "/m_fine_par" +
+                           param.output.extra_string + ".dat";
+      print_par_matrix_matlab(*M_fine, fname);
+      cout << "done. Time = " << chrono.RealTime() << " sec" << endl;
+    }
+    {
+      chrono.Clear();
+      cout << "Output S_fine matrix..." << flush;
+      const string fname = string(param.output.directory) + "/s_fine_par" +
+                           param.output.extra_string + ".dat";
+      print_par_matrix_matlab(*S_fine, fname);
+      cout << "done. Time = " << chrono.RealTime() << " sec" << endl;
+    }
+    {
+      chrono.Clear();
+      cout << "Output M_coarse matrix..." << flush;
+      const string fname = string(param.output.directory) + "/m_coarse_par" +
+                           param.output.extra_string + ".dat";
+      print_par_matrix_matlab(*M_coarse, fname);
+      cout << "done. Time = " << chrono.RealTime() << " sec" << endl;
+    }
+    {
+      chrono.Clear();
+      cout << "Output S_coarse matrix..." << flush;
+      const string fname = string(param.output.directory) + "/s_coarse_par" +
+                           param.output.extra_string + ".dat";
+      print_par_matrix_matlab(*S_coarse, fname);
+      cout << "done. Time = " << chrono.RealTime() << " sec" << endl;
+    }
+  }
+
   const string method_name = "parGMsFEM_";
 
   HypreParVector U_0(*M_coarse); U_0 = 0.0;
@@ -1251,23 +1386,23 @@ void AcousticWave::run_GMsFEM_parallel() const
       time_of_snapshots += timer.UserTime();
     }
 
-//    if (t_step % param.step_snap == 0)
-//    {
-//      ostringstream mesh_name, sol_name;
-//      mesh_name << param.output.directory << "/" << param.output.extra_string << "_mesh." << setfill('0') << setw(6) << myid;
-//      sol_name << param.output.directory << "/" << param.output.extra_string << "_sol_t" << t_step << "." << setfill('0') << setw(6) << myid;
+    if (t_step % param.step_snap == 0)
+    {
+      ostringstream mesh_name, sol_name;
+      mesh_name << param.output.directory << "/" << param.output.extra_string << "_mesh." << setfill('0') << setw(6) << myid;
+      sol_name << param.output.directory << "/" << param.output.extra_string << "_sol_t" << t_step << "." << setfill('0') << setw(6) << myid;
 
-//      ofstream mesh_ofs(mesh_name.str().c_str());
-//      mesh_ofs.precision(8);
-//      param.par_mesh->Print(mesh_ofs);
+      ofstream mesh_ofs(mesh_name.str().c_str());
+      mesh_ofs.precision(8);
+      param.par_mesh->Print(mesh_ofs);
 
-//      ofstream sol_ofs(sol_name.str().c_str());
-//      sol_ofs.precision(8);
-//      HypreParVector u_tmp(&fespace);
-//      R_global_T->Mult(U_0, u_tmp);
-//      ParGridFunction x(&fespace, &u_tmp);
-//      x.Save(sol_ofs);
-//    }
+      ofstream sol_ofs(sol_name.str().c_str());
+      sol_ofs.precision(8);
+      HypreParVector u_tmp(&fespace);
+      R_global_T->Mult(U_0, u_tmp);
+      ParGridFunction x(&fespace, &u_tmp);
+      x.Save(sol_ofs);
+    }
 
 //    if (t_step % param.step_seis == 0) {
 //      StopWatch timer;
