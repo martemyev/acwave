@@ -333,9 +333,10 @@ Parameters::~Parameters()
 
 void Parameters::init(int argc, char **argv)
 {
-  int myid = 0;
+  int myid = 0, nproc = 1;
 #ifdef MFEM_USE_MPI
   MPI_Comm_rank(MPI_COMM_WORLD, &myid);
+  MPI_Comm_size(MPI_COMM_WORLD, &nproc);
 #endif
 
   OptionsParser args(argc, argv);
@@ -424,6 +425,11 @@ void Parameters::init(int argc, char **argv)
     mesh->GetElement(el)->SetAttribute(el+1);
   if (myid == 0)
     cout << "Mesh initialization is done" << endl;
+
+//  int nxy[] = { 1, nproc };
+//  int *partitioning = mesh->CartesianPartitioning(nxy);
+//  par_mesh = new ParMesh(MPI_COMM_WORLD, *mesh, partitioning);
+//  delete[] partitioning;
 
   par_mesh = new ParMesh(MPI_COMM_WORLD, *mesh);
 
